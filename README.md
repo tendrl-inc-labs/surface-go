@@ -21,7 +21,7 @@ The shortest integration is `ScanFunc`: hand it a file, your handler receives th
 
 ```go
 process := surface.ScanFunc(client, &surface.ScanFileOptions{
-    Reject: []string{"Malicious", "Suspicious"}, // rejected files return *MaliciousFileError
+    Reject: []string{"Block"}, // refuse what the scanner recommends blocking
 }, func(r *surface.ScanResult) error {
     fmt.Println(r.SafetyScore.ThreatLevel) // Clean, Suspicious, or Malicious
     return nil                             // runs only for accepted files
@@ -31,6 +31,8 @@ if err := process(context.Background(), "suspicious.exe"); err != nil {
     log.Fatal(err) // *MaliciousFileError when the file was rejected
 }
 ```
+
+`Reject` matches the recommended action (`"Block"`, `"Review"`) or the threat level (`"Malicious"`, `"Suspicious"`).
 
 Prefer to call the client directly? One method does the scan:
 

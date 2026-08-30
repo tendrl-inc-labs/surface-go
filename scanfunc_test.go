@@ -55,3 +55,38 @@ func TestScanBytesFuncRejectsBeforeHandler(t *testing.T) {
 		t.Fatal("handler ran for a rejected file")
 	}
 }
+
+func TestScanBytesFuncRejectsOnRecommendedAction(t *testing.T) {
+	// maliciousScanJSON is threatLevel "Malicious" AND recommendedAction "Block".
+	c, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(maliciousScanJSON))
+	})
+	defer srv.Close()
+
+	called := false
+	process := ScanBytesFunc(c, &ScanFileOptions{Reject: []string{"Block"}},
+		func(res *ScanResult) error {
+			called = true
+			return nil
+		})
+
+	err := process(context.Background(), "sample.exe", []byte("payload"))
+	var mfe *MaliciousFileError
+	if !errors.As(err, &mfe) {
+		t.Fatalf("expected *MaliciousFileError for Reject [Block], got %v", err)
+	}
+	if called {
+		t.Fatal("handler ran for a file rejected on recommended action")
+	}
+}
+
+func TestMiddlewareShouldRejectOnRecommendedAction(t *testing.T) {
+	opts := &MiddlewareOptions{Reject: []string{"block"}} // action, lowercase
+	if !opts.shouldReject(SafetyScore{ThreatLevel: "Malicious", RecommendedAction: "Block"}) {
+		t.Fatal("expected reject when the recommended action is Block")
+	}
+	if opts.shouldReject(SafetyScore{ThreatLevel: "Clean", RecommendedAction: "Allow"}) {
+		t.Fatal("did not expect reject for Clean/Allow")
+	}
+}

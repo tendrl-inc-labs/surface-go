@@ -75,9 +75,10 @@ func NewClient(apiKey string) (*Client, error) {
 type ScanFileOptions struct {
 	Defer     bool
 	RequestID string
-	// Reject lists threat levels that should be rejected. If the scan result
-	// matches any level, a *MaliciousFileError is returned instead.
-	// E.g. []string{"Malicious", "Suspicious"}
+	// Reject lists threat levels ("Malicious"/"Suspicious") or recommended
+	// actions ("Block"/"Review") that should be rejected. If the scan result
+	// matches any of them, a *MaliciousFileError is returned instead.
+	// E.g. []string{"Block"} or []string{"Malicious", "Suspicious"}
 	Reject []string
 }
 
@@ -287,9 +288,11 @@ func (c *Client) ScanReader(ctx context.Context, filename string, r io.Reader, o
 
 	if opts != nil && len(opts.Reject) > 0 {
 		for _, level := range opts.Reject {
-			// ThreatLevel is capitalized server-side ("Clean"/"Suspicious"/
-			// "Malicious"); compare case-insensitively so reject=["malicious"] matches.
-			if strings.EqualFold(result.SafetyScore.ThreatLevel, level) {
+			// reject matches on threat level ("Clean"/"Suspicious"/"Malicious") or
+			// recommended action ("Allow"/"Review"/"Block") — the two vocabularies
+			// don't overlap, so a single case-insensitive check covers both.
+			if strings.EqualFold(result.SafetyScore.ThreatLevel, level) ||
+				strings.EqualFold(result.SafetyScore.RecommendedAction, level) {
 				return nil, &MaliciousFileError{Result: &result}
 			}
 		}
@@ -368,9 +371,11 @@ func (c *Client) ScanPayload(ctx context.Context, payload []byte, label string, 
 
 	if opts != nil && len(opts.Reject) > 0 {
 		for _, level := range opts.Reject {
-			// ThreatLevel is capitalized server-side ("Clean"/"Suspicious"/
-			// "Malicious"); compare case-insensitively so reject=["malicious"] matches.
-			if strings.EqualFold(result.SafetyScore.ThreatLevel, level) {
+			// reject matches on threat level ("Clean"/"Suspicious"/"Malicious") or
+			// recommended action ("Allow"/"Review"/"Block") — the two vocabularies
+			// don't overlap, so a single case-insensitive check covers both.
+			if strings.EqualFold(result.SafetyScore.ThreatLevel, level) ||
+				strings.EqualFold(result.SafetyScore.RecommendedAction, level) {
 				return nil, &MaliciousFileError{Result: &result}
 			}
 		}
