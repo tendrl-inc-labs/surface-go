@@ -17,6 +17,23 @@ go get github.com/tendrl-inc-labs/surface-go
 
 ## Quick Start — API Mode
 
+The shortest integration is `ScanFunc`: hand it a file, your handler receives the `*ScanResult`, and files matching `Reject` never reach it (`ScanBytesFunc` is the same for in-memory data).
+
+```go
+process := surface.ScanFunc(client, &surface.ScanFileOptions{
+    Reject: []string{"Malicious", "Suspicious"}, // rejected files return *MaliciousFileError
+}, func(r *surface.ScanResult) error {
+    fmt.Println(r.SafetyScore.ThreatLevel) // Clean, Suspicious, or Malicious
+    return nil                             // runs only for accepted files
+})
+
+if err := process(context.Background(), "suspicious.exe"); err != nil {
+    log.Fatal(err) // *MaliciousFileError when the file was rejected
+}
+```
+
+Prefer to call the client directly? One method does the scan:
+
 ```go
 package main
 
