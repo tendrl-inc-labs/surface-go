@@ -1,2 +1,8 @@
 *.test
 *.out
+
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+*.pem
