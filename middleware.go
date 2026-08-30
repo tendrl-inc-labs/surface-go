@@ -5,12 +5,14 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // MiddlewareOptions configures the ScanMiddleware behavior.
 type MiddlewareOptions struct {
-	// Reject lists threat levels that should be blocked (e.g. "Malicious", "Suspicious").
-	// If the scan result matches any of these, the request is rejected with 403.
+	// Reject lists threat levels ("Malicious"/"Suspicious") or recommended actions
+	// ("Block"/"Review") that should be blocked, matched case-insensitively. If the
+	// scan result matches any of these, the request is rejected with 403.
 	Reject []string
 
 	// ScanRequests enables scanning of incoming request bodies. Default: true.
@@ -68,12 +70,15 @@ func (o *MiddlewareOptions) label() string {
 	return o.Label
 }
 
-func (o *MiddlewareOptions) shouldReject(threatLevel string) bool {
+func (o *MiddlewareOptions) shouldReject(score SafetyScore) bool {
 	if o == nil {
 		return false
 	}
 	for _, level := range o.Reject {
-		if level == threatLevel {
+		// Match a threat level or a recommended action, case-insensitively —
+		// same semantics as ScanFileOptions.Reject.
+		if strings.EqualFold(score.ThreatLevel, level) ||
+			strings.EqualFold(score.RecommendedAction, level) {
 			return true
 		}
 	}
@@ -141,7 +146,7 @@ func ScanMiddleware(client *Client, next http.Handler, opts *MiddlewareOptions) 
 		}
 
 		// Check for threats
-		if result.ScanResult != nil && opts.shouldReject(result.ScanResult.SafetyScore.ThreatLevel) {
+		if result.ScanResult != nil && opts.shouldReject(result.ScanResult.SafetyScore) {
 			if opts != nil && opts.OnThreat != nil {
 				opts.OnThreat(r, result.ScanResult)
 			}
