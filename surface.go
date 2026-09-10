@@ -460,7 +460,6 @@ func (c *Client) GetAccount(ctx context.Context) (json.RawMessage, error) {
 	return raw, nil
 }
 
-
 // ---------------------------------------------------------------------------
 // Scan profiles
 // ---------------------------------------------------------------------------
