@@ -387,7 +387,7 @@ func (c *Client) ScanPayload(ctx context.Context, payload []byte, label string, 
 // ScanFiles scans multiple files concurrently from disk.
 // maxConcurrency controls how many uploads run in parallel (0 defaults to 10).
 // Returns results in the same order as the input paths. If any scan fails,
-// the first error is returned and remaining scans are cancelled.
+// the first error is returned and remaining scans are canceled.
 func (c *Client) ScanFiles(ctx context.Context, filePaths []string, opts *ScanFileOptions, maxConcurrency int) ([]*ScanFileResult, error) {
 	if maxConcurrency <= 0 {
 		maxConcurrency = 10

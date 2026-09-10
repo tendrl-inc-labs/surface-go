@@ -31,8 +31,10 @@ type QuotaExceededError struct{ SurfaceError }
 // RateLimitError is returned on 429 when per-minute rate limit is hit.
 type RateLimitError struct{ SurfaceError }
 
-// MaliciousFileError is returned by ScanFileSafe/ScanFileStrict when a file
-// is rejected based on its threat level. The full ScanResult is attached.
+// MaliciousFileError is returned by any scan method when the result matches an
+// entry in ScanFileOptions.Reject — a threat level ("Clean"/"Suspicious"/
+// "Malicious") or a recommended action ("Allow"/"Review"/"Block"), compared
+// case-insensitively. The full ScanResult is attached.
 type MaliciousFileError struct {
 	Result *ScanResult
 }

@@ -18,9 +18,6 @@ type MiddlewareOptions struct {
 	// ScanRequests enables scanning of incoming request bodies. Default: true.
 	ScanRequests *bool
 
-	// ScanResponses enables scanning of outgoing response bodies. Default: false.
-	ScanResponses *bool
-
 	// Label is an optional label for the scan (shown in scan history).
 	Label string
 
@@ -33,8 +30,10 @@ type MiddlewareOptions struct {
 	// are passed through without scanning. Default: 0 (scan everything).
 	MinSize int
 
-	// OnThreat is called when a threat is detected. Use for custom logging or alerting.
-	// Called before the 403 response is sent. If nil, a default JSON error is returned.
+	// OnThreat is called when a threat is detected. Use for custom logging or
+	// alerting. It runs just before the middleware writes its own 403 JSON
+	// response, and cannot replace or suppress that response — it has no access
+	// to the http.ResponseWriter.
 	OnThreat func(r *http.Request, result *ScanResult)
 
 	// OnError is called when scanning fails (scanner unavailable, timeout, etc.).
@@ -47,13 +46,6 @@ func (o *MiddlewareOptions) scanRequests() bool {
 		return true
 	}
 	return *o.ScanRequests
-}
-
-func (o *MiddlewareOptions) scanResponses() bool {
-	if o == nil || o.ScanResponses == nil {
-		return false
-	}
-	return *o.ScanResponses
 }
 
 func (o *MiddlewareOptions) failOpen() bool {

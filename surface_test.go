@@ -186,8 +186,8 @@ func TestMaliciousScanJSONValid(t *testing.T) {
 }
 
 // Coverage tells a caller how much the verdict is worth for this file's format.
-// It has to survive deserialisation or the distinction is invisible to them.
-func TestCoverageFieldsSurviveDeserialisation(t *testing.T) {
+// It has to survive deserialization or the distinction is invisible to them.
+func TestCoverageFieldsSurviveDeserialization(t *testing.T) {
 	c, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(minimalCoverageScanJSON))
 	})

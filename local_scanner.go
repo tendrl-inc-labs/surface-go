@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -257,7 +258,11 @@ func (c *Client) scanLocal(ctx context.Context, filename string, r io.Reader, op
 
 	if opts != nil && len(opts.Reject) > 0 && result.ScanResult != nil {
 		for _, level := range opts.Reject {
-			if result.ScanResult.SafetyScore.ThreatLevel == level {
+			// Same semantics as the API path: match a threat level
+			// ("Clean"/"Suspicious"/"Malicious") or a recommended action
+			// ("Allow"/"Review"/"Block"), case-insensitively.
+			if strings.EqualFold(result.ScanResult.SafetyScore.ThreatLevel, level) ||
+				strings.EqualFold(result.ScanResult.SafetyScore.RecommendedAction, level) {
 				return nil, &MaliciousFileError{Result: result.ScanResult}
 			}
 		}
@@ -325,7 +330,10 @@ func (c *Client) scanLocalPayload(ctx context.Context, payload []byte, label str
 
 	if opts != nil && len(opts.Reject) > 0 {
 		for _, level := range opts.Reject {
-			if result.SafetyScore.ThreatLevel == level {
+			// Same semantics as the API path — threat level or recommended
+			// action, case-insensitively.
+			if strings.EqualFold(result.SafetyScore.ThreatLevel, level) ||
+				strings.EqualFold(result.SafetyScore.RecommendedAction, level) {
 				return nil, &MaliciousFileError{Result: &result}
 			}
 		}

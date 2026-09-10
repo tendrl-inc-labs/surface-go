@@ -17,25 +17,6 @@ go get github.com/tendrl-inc-labs/surface-go
 
 ## Quick Start — API Mode
 
-The shortest integration is `ScanFunc`: hand it a file, your handler receives the `*ScanResult`, and files matching `Reject` never reach it (`ScanBytesFunc` is the same for in-memory data).
-
-```go
-process := surface.ScanFunc(client, &surface.ScanFileOptions{
-    Reject: []string{"Block"}, // refuse what the scanner recommends blocking
-}, func(r *surface.ScanResult) error {
-    fmt.Println(r.SafetyScore.ThreatLevel) // Clean, Suspicious, or Malicious
-    return nil                             // runs only for accepted files
-})
-
-if err := process(context.Background(), "suspicious.exe"); err != nil {
-    log.Fatal(err) // *MaliciousFileError when the file was rejected
-}
-```
-
-`Reject` matches the recommended action (`"Block"`, `"Review"`) or the threat level (`"Malicious"`, `"Suspicious"`).
-
-Prefer to call the client directly? One method does the scan:
-
 ```go
 package main
 
@@ -61,6 +42,24 @@ func main() {
     fmt.Println(result.ScanResult.SafetyScore.ThreatLevel)
 }
 ```
+
+Prefer not to check the verdict by hand? `ScanFunc` wraps the client: hand it a file, your handler receives the `*ScanResult`, and files matching `Reject` never reach it (`ScanBytesFunc` is the same for in-memory data).
+
+```go
+process := surface.ScanFunc(client, &surface.ScanFileOptions{
+    Reject: []string{"Block"}, // refuse what the scanner recommends blocking
+}, func(r *surface.ScanResult) error {
+    // Clean, Informational, Suspicious, or Malicious
+    fmt.Println(r.SafetyScore.ThreatLevel)
+    return nil // runs only for accepted files
+})
+
+if err := process(context.Background(), "suspicious.exe"); err != nil {
+    log.Fatal(err) // *MaliciousFileError when the file was rejected
+}
+```
+
+`Reject` matches the recommended action (`"Block"`, `"Review"`) or the threat level (`"Malicious"`, `"Suspicious"`), case-insensitively, in both API and local mode.
 
 ## Quick Start — Local Mode
 
@@ -124,19 +123,19 @@ If neither is set, `NewClient` returns an `*AuthenticationError`.
 ctx := context.Background()
 
 // From file path, bytes, or io.Reader
-result, err := client.ScanFile(ctx, "malware.exe", nil)
-result, err := client.ScanBytes(ctx, "sample.bin", data, nil)
-result, err := client.ScanReader(ctx, "upload.zip", reader, nil)
+fromPath, err := client.ScanFile(ctx, "malware.exe", nil)
+fromBytes, err := client.ScanBytes(ctx, "sample.bin", data, nil)
+fromReader, err := client.ScanReader(ctx, "upload.zip", reader, nil)
 
 // Reject malicious files — returns *MaliciousFileError
-result, err := client.ScanFile(ctx, "upload.exe", &surface.ScanFileOptions{
+checked, err := client.ScanFile(ctx, "upload.exe", &surface.ScanFileOptions{
     Reject: []string{"Malicious", "Suspicious"},
 })
 
 // Deferred scan (returns immediately, poll for results)
-result, err := client.ScanFile(ctx, "large.zip", &surface.ScanFileOptions{Defer: true})
-if result.Deferred != nil {
-    raw, _ := client.GetScan(ctx, result.Deferred.ScanID)
+queued, err := client.ScanFile(ctx, "large.zip", &surface.ScanFileOptions{Defer: true})
+if queued.Deferred != nil {
+    raw, err := client.GetScan(ctx, queued.Deferred.ScanID)
 }
 ```
 
@@ -149,7 +148,7 @@ result, err := client.ScanPayload(ctx, []byte("<?php system('id');"), "test.php"
 fmt.Println(result.ScanResult.SafetyScore.ThreatLevel)
 ```
 
-The payload is sent as raw text to `POST /api/scan/payload` (max 10 MB). Binary payloads are automatically base64-encoded by the SDK. Supports the same `ScanFileOptions` as `ScanFile`.
+The payload is sent as raw text to `POST /api/scan/payload`. Binary payloads are automatically base64-encoded by the SDK. Supports the same `ScanFileOptions` as `ScanFile`.
 
 ## Agentic Security
 
@@ -174,10 +173,14 @@ if result.ScanResult.PromptInjection != nil {
 mux := http.NewServeMux()
 mux.HandleFunc("/api/data", dataHandler)
 
+// FailOpen is a *bool so that "unset" (nil, the default) is distinguishable
+// from an explicit false. Unset means fail open.
+failOpen := true
+
 protected := surface.ScanMiddleware(client, mux, &surface.MiddlewareOptions{
     Reject:   []string{"Malicious", "Suspicious"},
     Label:    "api-gateway",
-    FailOpen: true, // allow requests through if scanning fails
+    FailOpen: &failOpen, // allow requests through if scanning fails
 })
 
 log.Fatal(http.ListenAndServe(":8080", protected))
@@ -194,18 +197,19 @@ Custom threat callback:
 ```go
 surface.ScanMiddleware(client, mux, &surface.MiddlewareOptions{
     Reject: []string{"Malicious"},
-    OnThreat: func(w http.ResponseWriter, r *http.Request, result *surface.ScanResult) {
+    OnThreat: func(r *http.Request, result *surface.ScanResult) {
         log.Printf("blocked %s from %s", result.SafetyScore.ThreatLevel, r.RemoteAddr)
-        http.Error(w, "rejected", http.StatusForbidden)
     },
 })
 ```
 
-Options: `Reject`, `ScanRequests`, `ScanResponses`, `Label`, `FailOpen`, `MinSize`, `OnThreat`, `OnError`.
+`OnThreat` runs for logging and alerting only — the middleware writes the 403 itself, so the callback has no `http.ResponseWriter` and cannot change the response.
+
+Options: `Reject`, `ScanRequests`, `Label`, `FailOpen`, `MinSize`, `OnThreat`, `OnError`.
 
 ## Batch Scanning
 
-Scan multiple files concurrently with `ScanFiles`. The third argument controls max concurrency (0 defaults to 10). If any scan fails, remaining scans are cancelled and the first error is returned:
+Scan multiple files concurrently with `ScanFiles`. The third argument controls max concurrency (0 defaults to 10). If any scan fails, remaining scans are canceled and the first error is returned:
 
 ```go
 paths := []string{"file1.exe", "file2.pdf", "file3.zip"}
@@ -261,7 +265,7 @@ profile, err := client.CreateProfile(ctx, map[string]interface{}{
 })
 ```
 
-New accounts automatically get three built-in profiles: **Default** (common file types, all engines), **All File Types** (all types, all engines), and **Agentic** (all types, strict sensitive data detection, auto IP blocking — optimized for agent-to-agent middleware).
+Built-in profiles are provisioned server-side; see the [scan profiles documentation](https://tendrl.com/docs/surface/profiles/) for what a new account starts with.
 
 ## API Keys
 
@@ -414,4 +418,4 @@ if err != nil {
 
 - Go 1.21+
 - No external dependencies
-- **Local mode only**: `surface-scanner` binary ([download](https://tendrl.com/docs/surface/scanner-binary/) or build from `scanner-binary/`)
+- **Local mode only**: `surface-scanner` binary ([download](https://tendrl.com/docs/surface/scanner-binary/))
