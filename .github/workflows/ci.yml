@@ -1,0 +1,47 @@
+name: CI
+
+# The repo had tests but nothing ran them. Reject silently ignored the values
+# its own quick start recommends, in local mode, and the test that now covers
+# that would never have run again without this.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      # A suite that collects nothing must not report success. Without this the
+      # green tick above means "no package failed", which an empty run satisfies.
+      - name: Tests must have run
+        run: |
+          count=$(go test -list '.*' ./... 2>/dev/null | grep -cE '^Test') || true
+          if [ "${count:-0}" -eq 0 ]; then
+            echo "::error::no tests were collected"
+            exit 1
+          fi
+          echo "collected $count test(s)"
+
+      - name: Formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed for: $unformatted"
+            exit 1
+          fi
