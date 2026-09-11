@@ -207,6 +207,13 @@ surface.ScanMiddleware(client, mux, &surface.MiddlewareOptions{
 
 Options: `Reject`, `ScanRequests`, `Label`, `FailOpen`, `MinSize`, `OnThreat`, `OnError`.
 
+**This middleware scans requests, not responses.** That is deliberate, and it
+differs from the JavaScript SDK, whose `createSafeFetch` scans both. Scanning an
+outgoing response in an `http.Handler` means buffering it in a wrapping
+`ResponseWriter`, which changes the contract every downstream handler is written
+against, including streaming and flushing. Scan outbound payloads explicitly
+with `ScanBytes` or `ScanReader` where you produce them.
+
 ## Batch Scanning
 
 Scan multiple files concurrently with `ScanFiles`. The third argument controls max concurrency (0 defaults to 10). If any scan fails, remaining scans are canceled and the first error is returned:
