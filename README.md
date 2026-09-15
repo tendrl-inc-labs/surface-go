@@ -158,6 +158,7 @@ When you scan a tool call an agent is about to make, some actions are dangerous 
 result, err := client.ScanPayload(ctx, toolCallJSON, "agent-step.json", &surface.ScanFileOptions{
     Context: &surface.ActionContext{
         PrincipalDomains: []string{"acme.io"},                       // what counts as "inside"
+        AllowedEgress:    []string{"api.stripe.com", "hooks.slack.com"}, // outside hosts you legitimately call
         KnownPayees:      []surface.ActionPayee{{Name: "Delta", IBAN: "GB29NWBK60161331926819"}},
         UserRequest:      userMessage,                               // what the user actually asked
     },
@@ -167,7 +168,7 @@ result, err := client.ScanPayload(ctx, toolCallJSON, "agent-step.json", &surface
 **Use cases**
 
 - **Payments** — a `create_payment`/`transfer` to an IBAN or account not in `KnownPayees` is Blocked; to a known payee it is Allowed.
-- **Data egress** — an email or upload leaving `PrincipalDomains` (or to a free-mail address) is flagged; a recipient the user named in `UserRequest` is cleared.
+- **Data egress** — an email or upload leaving `PrincipalDomains` (or to a free-mail address) is flagged; a recipient the user named in `UserRequest` is cleared. With `AllowedEgress` set, an HTTP POST of data to a host on neither list is flagged for review, so a Stripe or Slack call passes while a POST to an unknown endpoint is caught; a bare-IP destination or a secret in the body is flagged even without it.
 - **Task fit** — an action unrelated to `UserRequest` (a refund during "summarize my tickets") is surfaced.
 
 **Suggested implementation**
