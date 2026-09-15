@@ -80,6 +80,40 @@ type ScanFileOptions struct {
 	// matches any of them, a *MaliciousFileError is returned instead.
 	// E.g. []string{"Block"} or []string{"Malicious", "Suspicious"}
 	Reject []string
+	// Context is caller-supplied context for action screening of tool-call
+	// payloads. It lets the screener tell an action that fits who you are and
+	// what the user asked (a payment to a known payee, an email the user
+	// requested) from one that does not (a payment to an unknown account, data
+	// leaving to a personal address). Ignored for payloads that are not tool
+	// calls. Supply it from your trusted application state, never from the
+	// content being scanned. Optional; omit for face-value screening only.
+	Context *ActionContext
+}
+
+// ActionContext is what your application knows that the scanned payload does
+// not: whose domains are internal, which payees are legitimate, and what the
+// user actually asked the agent to do. Every field is optional. See the
+// "Action Screening Context" section of the README for use cases.
+type ActionContext struct {
+	// PrincipalDomains are the domains that count as inside the organization,
+	// e.g. []string{"acme.io"}. Data sent outside them is treated as egress.
+	PrincipalDomains []string `json:"principal_domains,omitempty"`
+	// KnownPayees are the accounts you legitimately pay. A payment to one of
+	// these is routine; a payment to any other account, with this list present,
+	// is flagged.
+	KnownPayees []ActionPayee `json:"known_payees,omitempty"`
+	// UserRequest is what the user actually asked for, from your trusted UI
+	// channel — never text lifted from the payload. It lets the screener clear
+	// an action the user asked for and flag one unrelated to the task.
+	UserRequest string `json:"user_request,omitempty"`
+}
+
+// ActionPayee identifies an account the caller legitimately pays. Give whichever
+// identifier your payments use; the screener matches on any provided.
+type ActionPayee struct {
+	Name    string `json:"name,omitempty"`
+	IBAN    string `json:"iban,omitempty"`
+	Account string `json:"account,omitempty"`
 }
 
 func (c *Client) buildURL(path string, params url.Values) string {
@@ -320,15 +354,20 @@ func (c *Client) ScanPayload(ctx context.Context, payload []byte, label string, 
 
 	// Auto-detect: if content is valid UTF-8 text, send raw. Otherwise base64.
 	type payloadReq struct {
-		Payload  string `json:"payload"`
-		Label    string `json:"label,omitempty"`
-		Encoding string `json:"encoding,omitempty"`
+		Payload  string         `json:"payload"`
+		Label    string         `json:"label,omitempty"`
+		Encoding string         `json:"encoding,omitempty"`
+		Context  *ActionContext `json:"context,omitempty"`
+	}
+	var actionCtx *ActionContext
+	if opts != nil {
+		actionCtx = opts.Context
 	}
 	var reqBody payloadReq
 	if utf8.Valid(payload) {
-		reqBody = payloadReq{Payload: string(payload), Label: label}
+		reqBody = payloadReq{Payload: string(payload), Label: label, Context: actionCtx}
 	} else {
-		reqBody = payloadReq{Payload: base64Encode(payload), Label: label, Encoding: "base64"}
+		reqBody = payloadReq{Payload: base64Encode(payload), Label: label, Encoding: "base64", Context: actionCtx}
 	}
 	bodyJSON, err := json.Marshal(reqBody)
 	if err != nil {

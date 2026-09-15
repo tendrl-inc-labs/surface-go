@@ -288,15 +288,20 @@ func (c *Client) scanLocalPayload(ctx context.Context, payload []byte, label str
 	}
 
 	type payloadReq struct {
-		Payload  string `json:"payload"`
-		Label    string `json:"label,omitempty"`
-		Encoding string `json:"encoding,omitempty"`
+		Payload  string         `json:"payload"`
+		Label    string         `json:"label,omitempty"`
+		Encoding string         `json:"encoding,omitempty"`
+		Context  *ActionContext `json:"context,omitempty"`
+	}
+	var actionCtx *ActionContext
+	if opts != nil {
+		actionCtx = opts.Context
 	}
 	var reqBody payloadReq
 	if utf8.Valid(payload) {
-		reqBody = payloadReq{Payload: string(payload), Label: label}
+		reqBody = payloadReq{Payload: string(payload), Label: label, Context: actionCtx}
 	} else {
-		reqBody = payloadReq{Payload: base64Encode(payload), Label: label, Encoding: "base64"}
+		reqBody = payloadReq{Payload: base64Encode(payload), Label: label, Encoding: "base64", Context: actionCtx}
 	}
 	bodyJSON, err := json.Marshal(reqBody)
 	if err != nil {
