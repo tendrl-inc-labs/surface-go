@@ -150,6 +150,32 @@ fmt.Println(result.ScanResult.SafetyScore.ThreatLevel)
 
 The payload is sent as raw text to `POST /api/scan/payload`. Binary payloads are automatically base64-encoded by the SDK. Supports the same `ScanFileOptions` as `ScanFile`.
 
+## Action Screening Context
+
+When you scan a tool call an agent is about to make, some actions are dangerous on their own (deleting a database, a secret in a URL) and some are dangerous only relative to *you* — a payment is fine to a known vendor but not to an account you've never paid; an email is fine to a colleague but not leaving to a personal address. The scanner sees the tool call but not your vendor list, your domains, or what the user asked. `Context` supplies those facts so it can decide confidently instead of defaulting to a cautious "Review".
+
+```go
+result, err := client.ScanPayload(ctx, toolCallJSON, "agent-step.json", &surface.ScanFileOptions{
+    Context: &surface.ActionContext{
+        PrincipalDomains: []string{"acme.io"},                       // what counts as "inside"
+        KnownPayees:      []surface.ActionPayee{{Name: "Delta", IBAN: "GB29NWBK60161331926819"}},
+        UserRequest:      userMessage,                               // what the user actually asked
+    },
+})
+```
+
+**Use cases**
+
+- **Payments** — a `create_payment`/`transfer` to an IBAN or account not in `KnownPayees` is Blocked; to a known payee it is Allowed.
+- **Data egress** — an email or upload leaving `PrincipalDomains` (or to a free-mail address) is flagged; a recipient the user named in `UserRequest` is cleared.
+- **Task fit** — an action unrelated to `UserRequest` (a refund during "summarize my tickets") is surfaced.
+
+**Suggested implementation**
+
+- Build `Context` from your **trusted application state** — your billing system's payee list, your configured domains, the user's message from your own UI. **Never** populate it from the payload being scanned; that would let an attacker vouch for their own request.
+- `Context` is optional. Omit it and screening still runs on face value — nothing that is dangerous on its own is missed.
+- Only what you put in `Context` is sent with the scan (for hosted scans, to the API). Keep `UserRequest` to the instruction itself.
+
 ## Agentic Security
 
 Payload scan results may include additional threat detection from agentic security engines. These fields are present on `ScanResult` as `json.RawMessage` (decode as needed):
