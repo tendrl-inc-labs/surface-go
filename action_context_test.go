@@ -24,6 +24,7 @@ func TestScanPayload_ForwardsContext(t *testing.T) {
 		"payment.json",
 		&ScanFileOptions{Context: &ActionContext{
 			PrincipalDomains: []string{"acme.io"},
+			AllowedEgress:    []string{"api.stripe.com", "hooks.slack.com"},
 			KnownPayees:      []ActionPayee{{Name: "Delta", IBAN: "GB29NWBK60161331926819"}},
 			UserRequest:      "pay this month's invoices",
 		}},
@@ -37,6 +38,10 @@ func TestScanPayload_ForwardsContext(t *testing.T) {
 	}
 	if ctx["user_request"] != "pay this month's invoices" {
 		t.Errorf("user_request not forwarded: %v", ctx["user_request"])
+	}
+	egress, ok := ctx["allowed_egress"].([]any)
+	if !ok || len(egress) != 2 || egress[0] != "api.stripe.com" {
+		t.Errorf("allowed_egress not forwarded: %v", ctx["allowed_egress"])
 	}
 	payees, ok := ctx["known_payees"].([]any)
 	if !ok || len(payees) != 1 {

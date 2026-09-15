@@ -106,6 +106,13 @@ type ActionContext struct {
 	// channel — never text lifted from the payload. It lets the screener clear
 	// an action the user asked for and flag one unrelated to the task.
 	UserRequest string `json:"user_request,omitempty"`
+	// AllowedEgress lists the external hosts the agent is expected to send data
+	// to — its known integrations, e.g. []string{"api.stripe.com", "hooks.slack.com"}.
+	// With this present, data sent to a host in neither PrincipalDomains nor this
+	// list, and not named in UserRequest, is flagged for review. Leave it empty and
+	// ordinary third-party API calls are not judged (only bare-IP and secret egress
+	// are), so you opt in to unknown-destination detection by declaring your hosts.
+	AllowedEgress []string `json:"allowed_egress,omitempty"`
 }
 
 // ActionPayee identifies an account the caller legitimately pays. Give whichever
