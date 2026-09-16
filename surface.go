@@ -98,10 +98,6 @@ type ActionContext struct {
 	// PrincipalDomains are the domains that count as inside the organization,
 	// e.g. []string{"acme.io"}. Data sent outside them is treated as egress.
 	PrincipalDomains []string `json:"principal_domains,omitempty"`
-	// KnownPayees are the accounts you legitimately pay. A payment to one of
-	// these is routine; a payment to any other account, with this list present,
-	// is flagged.
-	KnownPayees []ActionPayee `json:"known_payees,omitempty"`
 	// UserRequest is what the user actually asked for, from your trusted UI
 	// channel — never text lifted from the payload. It lets the screener clear
 	// an action the user asked for and flag one unrelated to the task.
@@ -113,14 +109,6 @@ type ActionContext struct {
 	// ordinary third-party API calls are not judged (only bare-IP and secret egress
 	// are), so you opt in to unknown-destination detection by declaring your hosts.
 	AllowedEgress []string `json:"allowed_egress,omitempty"`
-}
-
-// ActionPayee identifies an account the caller legitimately pays. Give whichever
-// identifier your payments use; the screener matches on any provided.
-type ActionPayee struct {
-	Name    string `json:"name,omitempty"`
-	IBAN    string `json:"iban,omitempty"`
-	Account string `json:"account,omitempty"`
 }
 
 func (c *Client) buildURL(path string, params url.Values) string {
