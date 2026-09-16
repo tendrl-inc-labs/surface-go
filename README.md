@@ -176,6 +176,42 @@ result, err := client.ScanPayload(ctx, toolCallJSON, "agent-step.json", &surface
 - `Context` is optional. Omit it and screening still runs on face value — nothing that is dangerous on its own is missed.
 - Only what you put in `Context` is sent with the scan (for hosted scans, to the API). Keep `UserRequest` to the instruction itself.
 
+### Guarding an agent's tool calls
+
+Action screening runs in your agent loop, around tool execution — it is not automatic. `ToolGuard` packages the propose → scan → branch pattern so you don't hand-wire it. Either call `Screen` and branch, `Check` at the top of your dispatch, or `Wrap` a single-argument tool.
+
+```go
+guard := &surface.ToolGuard{
+    Client: client,
+    // context from your trusted request state, rebuilt per call, never the args
+    ContextFunc: func(name string, args any) *surface.ActionContext {
+        return &surface.ActionContext{
+            PrincipalDomains: []string{"acme.io"},
+            AllowedEgress:    []string{"api.stripe.com", "hooks.slack.com"},
+            UserRequest:      session.UserMessage,
+        }
+    },
+}
+
+// Decide yourself
+d, err := guard.Screen(ctx, call.Name, call.Args)
+switch {
+case err != nil:      return err
+case d.Blocked():     return refuse(d.Reason)      // d.Findings has the action + evidence
+case d.NeedsReview(): return escalateToHuman(call, d)
+default:              return run(call)
+}
+
+// Or refuse at the top of a tool's dispatch
+if err := guard.Check(ctx, call.Name, call.Args); err != nil {
+    return err // *surface.BlockedError on Block (or Review when BlockOnReview)
+}
+
+// Or wrap a single-argument tool
+safeTransfer := surface.Wrap(guard, "transfer", transferFunds)
+_, err = safeTransfer(ctx, TransferArgs{To: "acct_…", Amount: 4800})
+```
+
 ## Agentic Security
 
 Payload scan results may include additional threat detection from agentic security engines. These fields are present on `ScanResult` as `json.RawMessage` (decode as needed):

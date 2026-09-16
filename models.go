@@ -111,6 +111,10 @@ type ScanResult struct {
 	PromptInjection  json.RawMessage `json:"promptInjection,omitempty"`
 	SensitiveData    json.RawMessage `json:"sensitiveData,omitempty"`
 	ToolCallAnalysis json.RawMessage `json:"toolCallAnalysis,omitempty"`
+	// ActionScreen carries {detected, toolCalls, findings:[{toolName, category,
+	// severity, reason, evidence}], contextual} when a tool call was flagged. The
+	// reason is also mirrored in SafetyScore.PrimaryThreat.
+	ActionScreen json.RawMessage `json:"actionScreen,omitempty"`
 }
 
 // DeferredScanResponse is returned when a scan is queued (HTTP 202).
