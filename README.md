@@ -173,7 +173,7 @@ result, err := client.ScanPayload(ctx, toolCallJSON, "agent-step.json", &surface
 **Suggested implementation**
 
 - Build `Context` from your **trusted application state** — your configured domains, your known integration hosts, the user's message from your own UI. **Never** populate it from the payload being scanned; that would let an attacker vouch for their own request.
-- `Context` is optional. Omit it and screening still runs on face value — nothing that is dangerous on its own is missed.
+- `Context` is optional. Pass only the fields you have; those values are typed (a domain list must be a slice of strings). Omit it and screening still runs on face value — nothing that is dangerous on its own is missed.
 - Only what you put in `Context` is sent with the scan (for hosted scans, to the API). Keep `UserRequest` to the instruction itself.
 
 ### Guarding an agent's tool calls
