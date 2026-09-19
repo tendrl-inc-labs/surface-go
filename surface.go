@@ -201,40 +201,6 @@ func (c *Client) postJSON(ctx context.Context, path string, body interface{}, ou
 	return nil
 }
 
-func (c *Client) putJSON(ctx context.Context, path string, body interface{}, out interface{}) error {
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest("PUT", c.buildURL(path, nil), bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.do(ctx, req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
-	}
-	return nil
-}
-
-func (c *Client) delete(ctx context.Context, path string) error {
-	req, err := http.NewRequest("DELETE", c.buildURL(path, nil), nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.do(ctx, req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	return nil
-}
-
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
@@ -492,77 +458,6 @@ func (c *Client) GetAccount(ctx context.Context) (json.RawMessage, error) {
 		return nil, err
 	}
 	return raw, nil
-}
-
-// ---------------------------------------------------------------------------
-// Scan profiles
-// ---------------------------------------------------------------------------
-
-// ListProfiles returns all scan profiles for the account.
-func (c *Client) ListProfiles(ctx context.Context) ([]ScanProfile, error) {
-	var resp struct {
-		Profiles []ScanProfile `json:"profiles"`
-	}
-	if err := c.getJSON(ctx, "/account/profiles", nil, &resp); err != nil {
-		return nil, err
-	}
-	return resp.Profiles, nil
-}
-
-// CreateProfile creates a new scan profile.
-func (c *Client) CreateProfile(ctx context.Context, params map[string]interface{}) (*ScanProfile, error) {
-	var p ScanProfile
-	if err := c.postJSON(ctx, "/account/profiles", params, &p); err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
-// UpdateProfile updates an existing scan profile.
-func (c *Client) UpdateProfile(ctx context.Context, profileID string, params map[string]interface{}) (*ScanProfile, error) {
-	var p ScanProfile
-	if err := c.putJSON(ctx, "/account/profiles/"+url.PathEscape(profileID), params, &p); err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
-// DeleteProfile deletes a scan profile.
-func (c *Client) DeleteProfile(ctx context.Context, profileID string) error {
-	return c.delete(ctx, "/account/profiles/"+url.PathEscape(profileID))
-}
-
-// ---------------------------------------------------------------------------
-// API keys
-// ---------------------------------------------------------------------------
-
-// ListAPIKeys returns all API keys for the account.
-func (c *Client) ListAPIKeys(ctx context.Context) ([]APIKey, error) {
-	var resp struct {
-		Keys []APIKey `json:"keys"`
-	}
-	if err := c.getJSON(ctx, "/account/keys", nil, &resp); err != nil {
-		return nil, err
-	}
-	return resp.Keys, nil
-}
-
-// CreateAPIKey creates a new API key.
-func (c *Client) CreateAPIKey(ctx context.Context, label string, profileID string) (*APIKey, error) {
-	body := map[string]string{"label": label}
-	if profileID != "" {
-		body["profile_id"] = profileID
-	}
-	var k APIKey
-	if err := c.postJSON(ctx, "/account/keys", body, &k); err != nil {
-		return nil, err
-	}
-	return &k, nil
-}
-
-// DeleteAPIKey deletes an API key.
-func (c *Client) DeleteAPIKey(ctx context.Context, keyID string) error {
-	return c.delete(ctx, "/account/keys/"+url.PathEscape(keyID))
 }
 
 // ---------------------------------------------------------------------------
