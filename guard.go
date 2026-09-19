@@ -49,13 +49,13 @@ func (e *BlockedError) Error() string {
 type ContextFunc func(name string, args any) *ActionContext
 
 // ToolGuard screens proposed tool calls with Surface and decides the verdict.
-// Set Context for a fixed context, or ContextFunc to build one per call from
-// your trusted request state (preferred). Never derive context from the tool
-// arguments. If BlockOnReview is set, Review is treated as a hard stop.
+// Context is optional. Set Context for a fixed value, or ContextFunc if it
+// changes per call. Never derive either from the tool arguments. If
+// BlockOnReview is set, Review is treated as a hard stop.
 type ToolGuard struct {
 	Client        *Client
 	Context       *ActionContext // fixed context; ignored when ContextFunc is set
-	ContextFunc   ContextFunc    // per-call context (preferred)
+	ContextFunc   ContextFunc    // only needed if context changes per call
 	BlockOnReview bool
 }
 
