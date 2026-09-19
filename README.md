@@ -307,49 +307,9 @@ fmt.Printf("%d/%d scans used this period (%d remaining)\n", usage.ScansUsed, usa
 account, err := client.GetAccount(ctx)
 ```
 
-## Scan Profiles
+## Profiles and API Keys
 
-```go
-profiles, err := client.ListProfiles(ctx)
-
-profile, err := client.CreateProfile(ctx, map[string]interface{}{
-    "name":          "Images Only",
-    "allowed_types": "jpg,jpeg,png,gif,webp",
-})
-
-_, err = client.UpdateProfile(ctx, profile.ID, map[string]interface{}{
-    "name": "Images & PDFs",
-})
-
-err = client.DeleteProfile(ctx, profile.ID)
-```
-
-### Profile Engine Configuration
-
-Control which engines run and configure per-engine settings via `engine_config`:
-
-```go
-profile, err := client.CreateProfile(ctx, map[string]interface{}{
-    "name":                "Agentic Intake",
-    "allowed_types":       "json,txt,md",
-    "enable_payload_scan": true,
-    "engine_config": map[string]interface{}{
-        "prompt_injection": map[string]interface{}{"enabled": true},
-        "sensitive_data":   map[string]interface{}{"enabled": true, "mask_output": true},
-        "ml":               map[string]interface{}{"threshold": 0.8},
-    },
-})
-```
-
-Built-in profiles are provisioned server-side; see the [scan profiles documentation](https://tendrl.com/docs/surface/scan-profiles/) for what a new account starts with.
-
-## API Keys
-
-```go
-keys, err := client.ListAPIKeys(ctx)
-newKey, err := client.CreateAPIKey(ctx, "Production", profileID)
-err = client.DeleteAPIKey(ctx, keyID)
-```
+The SDK doesn't manage scan profiles or API keys. Each key is bound to a profile, and scans use it automatically, so scanning code never needs to choose one. Create and edit profiles and keys in the Surface dashboard, the [REST API](https://tendrl.com/docs/surface/api/), or the [Surface MCP tools](https://tendrl.com/docs/surface/ai/mcp-server/). See [scan profiles](https://tendrl.com/docs/surface/scan-profiles/) for what each setting does.
 
 ## Scan History
 

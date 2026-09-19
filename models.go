@@ -182,36 +182,6 @@ type Usage struct {
 	DailyVolume    *DailyVolume `json:"daily_volume,omitempty"`
 }
 
-// ScanProfile defines a reusable scanning configuration.
-type ScanProfile struct {
-	ID                string                 `json:"id"`
-	AccountID         string                 `json:"account_id"`
-	Name              string                 `json:"name"`
-	IsDefault         bool                   `json:"is_default"`
-	AllowedTypes      string                 `json:"allowed_types"`
-	MaxFileSize       int64                  `json:"max_file_size"`
-	BlockMaliciousIP  bool                   `json:"block_malicious_ip"`
-	EnablePayloadScan bool                   `json:"enable_payload_scan"`
-	EngineConfig      map[string]interface{} `json:"engine_config"`
-	WebhookURL        string                 `json:"webhook_url,omitempty"`
-	WebhookAPIKey     string                 `json:"webhook_api_key,omitempty"`
-	CreatedAt         string                 `json:"created_at"`
-	UpdatedAt         string                 `json:"updated_at"`
-}
-
-// APIKey represents an API key linked to a scan profile.
-type APIKey struct {
-	ID          string `json:"id"`
-	AccountID   string `json:"account_id"`
-	ProfileID   string `json:"profile_id"`
-	KeyID       string `json:"key_id"`
-	KeyValue    string `json:"key_value,omitempty"`
-	Label       string `json:"label"`
-	LastUsedAt  string `json:"last_used_at,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	ProfileName string `json:"profile_name,omitempty"`
-}
-
 // ScanHistoryEntry represents a single scan in the history.
 type ScanHistoryEntry struct {
 	ID            string `json:"id"`
