@@ -181,17 +181,7 @@ result, err := client.ScanPayload(ctx, toolCallJSON, "agent-step.json", &surface
 Action screening runs in your agent loop, around tool execution — it is not automatic. `ToolGuard` packages the propose → scan → branch pattern so you don't hand-wire it. Either call `Screen` and branch, `Check` at the top of your dispatch, or `Wrap` a single-argument tool.
 
 ```go
-guard := &surface.ToolGuard{
-    Client: client,
-    // context from your trusted request state, rebuilt per call, never the args
-    ContextFunc: func(name string, args any) *surface.ActionContext {
-        return &surface.ActionContext{
-            PrincipalDomains: []string{"acme.io"},
-            AllowedEgress:    []string{"api.stripe.com", "hooks.slack.com"},
-            UserRequest:      session.UserMessage,
-        }
-    },
-}
+guard := &surface.ToolGuard{Client: client}
 
 // Decide yourself
 d, err := guard.Screen(ctx, call.Name, call.Args)
@@ -210,6 +200,19 @@ if err := guard.Check(ctx, call.Name, call.Args); err != nil {
 // Or wrap a single-argument tool
 safeTransfer := surface.Wrap(guard, "transfer", transferFunds)
 _, err = safeTransfer(ctx, TransferArgs{To: "acct_…", Amount: 4800})
+```
+
+Context is optional. Pass the fields you have from trusted app state — never from the tool arguments. `ContextFunc` is only needed if the values change per call.
+
+```go
+guard := &surface.ToolGuard{
+    Client: client,
+    Context: &surface.ActionContext{
+        PrincipalDomains: []string{"acme.io"},
+        AllowedEgress:    []string{"api.stripe.com", "hooks.slack.com"},
+        UserRequest:      session.UserMessage,
+    },
+}
 ```
 
 ## Agentic Security
@@ -235,17 +238,21 @@ if result.ScanResult.PromptInjection != nil {
 mux := http.NewServeMux()
 mux.HandleFunc("/api/data", dataHandler)
 
-// FailOpen is a *bool so that "unset" (nil, the default) is distinguishable
-// from an explicit false. Unset means fail open.
-failOpen := true
-
 protected := surface.ScanMiddleware(client, mux, &surface.MiddlewareOptions{
-    Reject:   []string{"Malicious", "Suspicious"},
-    Label:    "api-gateway",
-    FailOpen: &failOpen, // allow requests through if scanning fails
+    Reject: []string{"Malicious"},
 })
 
 log.Fatal(http.ListenAndServe(":8080", protected))
+```
+
+`FailOpen` is a `*bool` so unset (the default, fail open) is distinguishable from an explicit `false`. Set it only when you want a hard 503 if the scanner is down:
+
+```go
+failClosed := false
+surface.ScanMiddleware(client, mux, &surface.MiddlewareOptions{
+    Reject:   []string{"Malicious"},
+    FailOpen: &failClosed,
+})
 ```
 
 For a single handler function, use `ScanHandlerFunc`:
