@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"testing"
 )
 
@@ -116,5 +117,88 @@ func TestScanPayload_ContextFlipsVerdict(t *testing.T) {
 	}
 	if got := verdictFor(nil); got != "Allow" {
 		t.Errorf("egress with no context: got %q, want Allow", got)
+	}
+}
+
+func TestActionContext_StrictnessValidated(t *testing.T) {
+	for _, level := range []string{"", StrictnessRelaxed, StrictnessBalanced, StrictnessStrict} {
+		if err := (&ActionContext{Strictness: level}).Validate(); err != nil {
+			t.Errorf("%q should be accepted: %v", level, err)
+		}
+	}
+	for _, bad := range []string{"high", "Strict", "stirct"} {
+		if err := (&ActionContext{Strictness: bad}).Validate(); err == nil {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+	if err := (*ActionContext)(nil).Validate(); err != nil {
+		t.Errorf("nil context should be valid: %v", err)
+	}
+}
+
+func TestScanPayload_ClientStrictnessDefault(t *testing.T) {
+	for _, mode := range []string{"api", "local"} {
+		var got []any
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			var body map[string]any
+			_ = json.Unmarshal(b, &body)
+			got = append(got, body["context"])
+			w.Write([]byte(`{"safetyScore":{"threatLevel":"Clean","recommendedAction":"Allow"}}`))
+		}
+		var c *Client
+		var closeSrv func()
+		if mode == "api" {
+			cc, srv := newTestClient(t, handler)
+			c, closeSrv = cc, srv.Close
+		} else {
+			cc, srv := newTestLocalClient(t, handler)
+			c, closeSrv = cc, srv.Close
+		}
+		c.Strictness = StrictnessStrict
+		caller := &ActionContext{PrincipalDomains: []string{"acme.io"}}
+		// No context, a context without strictness, a context with its own.
+		for _, o := range []*ScanFileOptions{
+			nil,
+			{Context: caller},
+			{Context: &ActionContext{Strictness: StrictnessRelaxed}},
+		} {
+			if _, err := c.ScanPayload(context.Background(), []byte("{}"), "c.json", o); err != nil {
+				t.Fatalf("%s: ScanPayload: %v", mode, err)
+			}
+		}
+		closeSrv()
+		want := []any{
+			map[string]any{"strictness": "strict"},
+			map[string]any{"principal_domains": []any{"acme.io"}, "strictness": "strict"},
+			map[string]any{"strictness": "relaxed"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: contexts sent = %v, want %v", mode, got, want)
+		}
+		if caller.Strictness != "" {
+			t.Errorf("%s: client default mutated the caller's context", mode)
+		}
+	}
+}
+
+func TestScanPayload_InvalidStrictnessRejected(t *testing.T) {
+	calls := 0
+	c, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { calls++ })
+	defer srv.Close()
+	c.Strictness = "high"
+	if _, err := c.ScanPayload(context.Background(), []byte("{}"), "c.json", nil); err == nil {
+		t.Error("invalid client strictness should be rejected")
+	}
+	c.Strictness = ""
+	if _, err := c.ScanPayload(context.Background(), []byte("{}"), "c.json",
+		&ScanFileOptions{Context: &ActionContext{Strictness: "high"}}); err == nil {
+		t.Error("invalid context strictness should be rejected")
+	}
+	if calls != 0 {
+		t.Errorf("invalid strictness reached the server (%d calls)", calls)
+	}
+	if _, err := NewLocalClient(&LocalConfig{APIKey: "sfk_test", ScannerPath: "unused", Strictness: "high"}); err == nil {
+		t.Error("NewLocalClient should reject an invalid strictness")
 	}
 }

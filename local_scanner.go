@@ -47,12 +47,36 @@ type LocalConfig struct {
 
 	// Port to run the daemon on. 0 (default) picks a random available port.
 	Port int
+
+	// Strictness is the client's default ActionContext.Strictness for payload
+	// scans (see Client.Strictness). Empty leaves the scanner default.
+	Strictness string
+
+	// StartTimeout bounds how long the first scan waits for the daemon to
+	// become ready. The first launch on a machine downloads threat feeds, so
+	// the default is 2 minutes; later launches take seconds.
+	StartTimeout time.Duration
+
+	// Stderr, if set, receives the daemon's log output. By default it is kept
+	// out of your program's stderr (a daemon holding that open makes a
+	// pipeline like `yourprogram | tail` wait forever); the last few KB are
+	// still included in the error if the daemon fails to start.
+	Stderr io.Writer
 }
 
+const defaultStartTimeout = 2 * time.Minute
+
 // localDaemon manages a scanner binary running in daemon mode.
+//
+// The daemon listens on loopback only and is started with --parent-pid when
+// the binary supports it, so it exits with your program even if Close is
+// never called. Older binaries without that flag still work; call Close.
 type localDaemon struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
+	exited  chan struct{} // closed when the daemon process exits
+	exitErr error         // set before exited is closed
+	logTail *tailBuffer
 	port    int
 	baseURL string
 	client  *http.Client
@@ -77,6 +101,10 @@ func NewLocalClient(config *LocalConfig) (*Client, error) {
 		}}
 	}
 
+	if err := validateStrictness(config.Strictness); err != nil {
+		return nil, err
+	}
+
 	scannerPath := config.ScannerPath
 	if scannerPath == "" {
 		var err error
@@ -95,23 +123,28 @@ func NewLocalClient(config *LocalConfig) (*Client, error) {
 	}
 
 	c := &Client{
-		APIKey: apiKey,
-		Mode:   ModeLocal,
-		HTTP:   http.DefaultClient,
-		local:  daemon,
+		APIKey:     apiKey,
+		Mode:       ModeLocal,
+		HTTP:       http.DefaultClient,
+		Strictness: config.Strictness,
+		local:      daemon,
 		localConfig: &localConfigInternal{
-			scannerPath: scannerPath,
-			dataDir:     config.DataDir,
-			port:        config.Port,
+			scannerPath:  scannerPath,
+			dataDir:      config.DataDir,
+			port:         config.Port,
+			startTimeout: config.StartTimeout,
+			stderr:       config.Stderr,
 		},
 	}
 	return c, nil
 }
 
 type localConfigInternal struct {
-	scannerPath string
-	dataDir     string
-	port        int
+	scannerPath  string
+	dataDir      string
+	port         int
+	startTimeout time.Duration
+	stderr       io.Writer
 }
 
 // ensureRunning starts the daemon if it isn't already running.
@@ -132,26 +165,51 @@ func (d *localDaemon) ensureRunning(config *localConfigInternal) error {
 		}
 	}
 
+	// Loopback only: the daemon has no authentication of its own, so an
+	// all-interfaces bind would expose an open scanning service to the network.
 	args := []string{
 		"--daemon",
-		fmt.Sprintf("--listen=:%d", port),
+		fmt.Sprintf("--listen=127.0.0.1:%d", port),
 	}
 	if config.dataDir != "" {
 		args = append(args, "--data-dir="+config.dataDir)
 	}
+	if scannerSupportsParentPID(config.scannerPath) {
+		args = append(args, fmt.Sprintf("--parent-pid=%d", os.Getpid()))
+	}
 
+	d.logTail = newTailBuffer(8 << 10)
+	var logOut io.Writer = d.logTail
+	if config.stderr != nil {
+		logOut = io.MultiWriter(d.logTail, config.stderr)
+	}
 	d.cmd = exec.Command(config.scannerPath, args...)
-	d.cmd.Stderr = os.Stderr
+	d.cmd.Stdout = logOut
+	d.cmd.Stderr = logOut
 	if err := d.cmd.Start(); err != nil {
 		return fmt.Errorf("surface: start scanner daemon: %w", err)
 	}
+	exited := make(chan struct{})
+	d.exited = exited
+	go func(cmd *exec.Cmd) {
+		err := cmd.Wait()
+		d.exitErr = err
+		close(exited)
+	}(d.cmd)
 
 	d.port = port
 	d.baseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
 
-	// Wait for daemon to be ready
-	if err := d.waitForReady(); err != nil {
+	timeout := config.startTimeout
+	if timeout <= 0 {
+		timeout = defaultStartTimeout
+	}
+	if err := d.waitForReady(timeout); err != nil {
 		_ = d.cmd.Process.Kill()
+		<-d.exited
+		if tail := strings.TrimSpace(d.logTail.String()); tail != "" {
+			err = fmt.Errorf("%w\nscanner output:\n%s", err, tail)
+		}
 		return fmt.Errorf("surface: scanner daemon failed to start: %w", err)
 	}
 
@@ -159,23 +217,79 @@ func (d *localDaemon) ensureRunning(config *localConfigInternal) error {
 	return nil
 }
 
-// waitForReady polls the daemon's health endpoint until it responds.
-func (d *localDaemon) waitForReady() error {
-	deadline := time.Now().Add(30 * time.Second)
+// waitForReady polls the daemon's health endpoint until it responds, the
+// daemon exits, or timeout passes. Each poll has its own short timeout so the
+// overall deadline holds.
+func (d *localDaemon) waitForReady(timeout time.Duration) error {
+	poll := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := d.client.Get(d.baseURL + "/health")
+		select {
+		case <-d.exited:
+			if d.exitErr != nil {
+				return fmt.Errorf("daemon exited during startup: %v", d.exitErr)
+			}
+			return fmt.Errorf("daemon exited during startup")
+		default:
+		}
+		resp, err := poll.Get(d.baseURL + "/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-d.exited:
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
-	return fmt.Errorf("daemon did not become ready within 30 seconds")
+	return fmt.Errorf("daemon did not become ready within %s (the first launch downloads threat feeds; raise LocalConfig.StartTimeout if needed)", timeout)
 }
 
-// scan sends a file to the local daemon and returns the result.
+// parentPIDSupport caches, per scanner binary, whether it accepts --parent-pid.
+var parentPIDSupport sync.Map
+
+// scannerSupportsParentPID reports whether the binary lists --parent-pid in
+// its usage. Binaries from before that flag reject unknown flags and would
+// fail to start, so it is only passed when present.
+func scannerSupportsParentPID(path string) bool {
+	if v, ok := parentPIDSupport.Load(path); ok {
+		return v.(bool)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, path, "-h").CombinedOutput() // -h exits non-zero
+	ok := bytes.Contains(out, []byte("parent-pid"))
+	parentPIDSupport.Store(path, ok)
+	return ok
+}
+
+// tailBuffer keeps the last max bytes written to it.
+type tailBuffer struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func newTailBuffer(max int) *tailBuffer { return &tailBuffer{max: max} }
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if over := len(t.buf) - t.max; over > 0 {
+		t.buf = append(t.buf[:0], t.buf[over:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.buf)
+}
+
 func (d *localDaemon) scan(ctx context.Context, filename string, r io.Reader, opts *ScanFileOptions) (*ScanFileResult, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
@@ -242,7 +356,12 @@ func (d *localDaemon) stop() error {
 	if err := d.cmd.Process.Signal(os.Interrupt); err != nil {
 		_ = d.cmd.Process.Kill()
 	}
-	_ = d.cmd.Wait()
+	select {
+	case <-d.exited:
+	case <-time.After(5 * time.Second):
+		_ = d.cmd.Process.Kill()
+		<-d.exited
+	}
 	return nil
 }
 
@@ -283,6 +402,10 @@ func (c *Client) scanLocalFile(ctx context.Context, filePath string, opts *ScanF
 
 // scanLocalPayload scans a raw payload in local mode via the daemon's /scan/payload endpoint.
 func (c *Client) scanLocalPayload(ctx context.Context, payload []byte, label string, opts *ScanFileOptions) (*ScanFileResult, error) {
+	actionCtx, err := c.payloadContext(opts)
+	if err != nil {
+		return nil, err
+	}
 	if err := c.local.ensureRunning(c.localConfig); err != nil {
 		return nil, err
 	}
@@ -292,10 +415,6 @@ func (c *Client) scanLocalPayload(ctx context.Context, payload []byte, label str
 		Label    string         `json:"label,omitempty"`
 		Encoding string         `json:"encoding,omitempty"`
 		Context  *ActionContext `json:"context,omitempty"`
-	}
-	var actionCtx *ActionContext
-	if opts != nil {
-		actionCtx = opts.Context
 	}
 	var reqBody payloadReq
 	if utf8.Valid(payload) {
