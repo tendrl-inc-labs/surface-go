@@ -96,13 +96,17 @@ With custom scanner path:
 
 ```go
 client, err := surface.NewLocalClient(&surface.LocalConfig{
-    APIKey:      "sfk_your_token_here",
-    ScannerPath: "/usr/local/bin/surface-scanner",
-    DataDir:     "/var/lib/surface/data",
+    APIKey:       "sfk_your_token_here",
+    ScannerPath:  "/usr/local/bin/surface-scanner",
+    DataDir:      "/var/lib/surface/data",
+    StartTimeout: 3 * time.Minute, // optional; default 2 minutes
+    Stderr:       os.Stderr,       // optional; the daemon's log
 })
 ```
 
-The local client starts the scanner in daemon mode on a random port. It starts automatically on the first scan and stops when you call `Close()`. The same `ScanFile`, `ScanBytes`, `ScanReader`, and `ScanFiles` methods work in both modes.
+The local client starts the scanner in daemon mode on a random loopback port (`127.0.0.1`). It starts automatically on the first scan and stops when you call `Close()`. It also exits by itself when your program does, even if `Close()` never runs because the program crashed or was killed. That needs a scanner binary with the `--parent-pid` flag; with an older binary, call `Close()`. The same `ScanFile`, `ScanBytes`, `ScanReader`, and `ScanFiles` methods work in both modes.
+
+The first launch on a machine downloads threat feeds, so the first scan can take a while; `StartTimeout` bounds the wait. The daemon's log stays out of your program's output unless you set `Stderr`; if it fails to start, the error includes its last lines.
 
 ## Authentication
 
@@ -164,6 +168,20 @@ result, err := client.ScanPayload(ctx, toolCallJSON, "agent-step.json", &surface
 })
 ```
 
+**Strictness**
+
+`Strictness` sets how readily a judgment call turns into a verdict. It never changes face-dangerous actions (a public share, a secret in a URL, destructive commands), which Block at every level.
+
+- `surface.StrictnessRelaxed`: stop only what's certainly malicious.
+- `surface.StrictnessBalanced` (the default): stop what's certainly malicious, ask before risky or irreversible actions.
+- `surface.StrictnessStrict`: ask or stop on anything that needs judgment, including mail to personal addresses and outside recipients.
+
+```go
+&surface.ActionContext{PrincipalDomains: []string{"acme.io"}, UserRequest: userMessage, Strictness: surface.StrictnessStrict}
+```
+
+Set `client.Strictness` (or `LocalConfig.Strictness`) for a default on every `ScanPayload`: it fills the context's strictness only when the context sets none, and is sent on its own when you pass no context. Leave it empty and the scanner uses balanced, so an agent with no configuration isn't stopped while it does routine work. An invalid value is rejected with an error before anything is sent.
+
 **Use cases**
 
 - **Data egress** — an email or upload leaving `PrincipalDomains` (or to a free-mail address) is flagged; a recipient the user named in `UserRequest` is cleared. With `AllowedEgress` set, an HTTP POST of data to a host on neither list is flagged for review, so a Stripe or Slack call passes while a POST to an unknown endpoint is caught; a bare-IP destination or a secret in the body is flagged even without it.
@@ -173,7 +191,7 @@ result, err := client.ScanPayload(ctx, toolCallJSON, "agent-step.json", &surface
 **Suggested implementation**
 
 - Build `Context` from your **trusted application state** — your configured domains, your known integration hosts, the user's message from your own UI. **Never** populate it from the payload being scanned; that would let an attacker vouch for their own request.
-- `Context` is optional. Pass only the fields you have; those values are typed (a domain list must be a slice of strings). Omit it and screening still runs on face value — nothing that is dangerous on its own is missed.
+- `Context` is optional. Pass only the fields you have; those values are typed (a domain list must be a slice of strings) and `Strictness` is validated. Omit it and screening still runs on face value — nothing that is dangerous on its own is missed.
 - Only what you put in `Context` is sent with the scan (for hosted scans, to the API). Keep `UserRequest` to the instruction itself.
 
 ### Guarding an agent's tool calls
@@ -194,12 +212,31 @@ default:              return run(call)
 
 // Or refuse at the top of a tool's dispatch
 if err := guard.Check(ctx, call.Name, call.Args); err != nil {
-    return err // *surface.BlockedError on Block (or Review when BlockOnReview)
+    return err // *surface.BlockedError on Block, *surface.NeedsReviewError on Review
 }
 
 // Or wrap a single-argument tool
 safeTransfer := surface.Wrap(guard, "transfer", transferFunds)
 _, err = safeTransfer(ctx, TransferArgs{To: "acct_…", Amount: 4800})
+```
+
+Review means a person should confirm the call. `Check` and `Wrap` hold it by default: the tool does not run and you get a `*surface.NeedsReviewError`. That error unwraps to a `*surface.BlockedError` (and matches `errors.Is(err, surface.ErrBlocked)`), so handling written for Block still stops it; check for it first to ask the user and retry. Block never runs, whatever the policy. Set `OnReview` to change what happens on Review:
+
+```go
+guard.OnReview = surface.ReviewAllow // run it anyway
+guard.OnReview = surface.ReviewFunc(func(d surface.Decision) bool {
+    return askUser(d.Reason) // true runs the tool
+})
+// or a surface.ReviewPolicy, func(ctx, d) bool, when you need the call's context
+```
+
+`BlockOnReview: true` is the older spelling of the default hold and overrides `OnReview`.
+
+```go
+var nr *surface.NeedsReviewError
+if errors.As(err, &nr) {
+    return askUser(nr.Decision.Reason, nr.Decision.Findings)
+}
 ```
 
 Context is optional. Pass the fields you have from trusted app state — never from the tool arguments. `ContextFunc` is only needed if the values change per call.
@@ -212,8 +249,11 @@ guard := &surface.ToolGuard{
         AllowedEgress:    []string{"api.stripe.com", "hooks.slack.com"},
         UserRequest:      session.UserMessage,
     },
+    Strictness: surface.StrictnessBalanced, // used when the context sets none
 }
 ```
+
+`guard.Strictness` fills the context's strictness when it has none, ahead of the client's default. `Decision.Strictness` records the level the call was screened at (`"balanced"` when nothing set one). A framework hook that has the run's prompt can pass it per call with `guard.Screen(ctx, name, args, surface.WithUserRequest(prompt))` (also accepted by `Check`); it fills `UserRequest` only when the guard's context has none.
 
 ## Agentic Security
 

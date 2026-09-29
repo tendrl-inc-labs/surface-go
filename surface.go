@@ -46,6 +46,12 @@ type Client struct {
 	HTTP    *http.Client
 	Mode    ScanMode
 
+	// Strictness is the default ActionContext.Strictness for ScanPayload: it
+	// fills the context's strictness when the caller's context sets none, and
+	// is sent alone when no context is given. Empty leaves the scanner default
+	// (StrictnessBalanced). An invalid value makes ScanPayload return an error.
+	Strictness string
+
 	// internal fields for local scanner mode
 	local       *localDaemon
 	localConfig *localConfigInternal
@@ -109,6 +115,67 @@ type ActionContext struct {
 	// ordinary third-party API calls are not judged (only bare-IP and secret egress
 	// are), so you opt in to unknown-destination detection by declaring your hosts.
 	AllowedEgress []string `json:"allowed_egress,omitempty"`
+	// Strictness sets how readily a judgment call becomes a verdict:
+	// StrictnessRelaxed, StrictnessBalanced (the scanner default when empty),
+	// or StrictnessStrict. Face-dangerous actions Block at every level.
+	Strictness string `json:"strictness,omitempty"`
+}
+
+// Accepted ActionContext.Strictness values. Empty means the scanner default,
+// StrictnessBalanced.
+const (
+	// StrictnessRelaxed stops only what is certainly malicious.
+	StrictnessRelaxed = "relaxed"
+	// StrictnessBalanced stops what is certainly malicious and asks before
+	// risky or irreversible actions. The default.
+	StrictnessBalanced = "balanced"
+	// StrictnessStrict asks or stops on anything that needs judgment,
+	// including mail to personal addresses and outside recipients.
+	StrictnessStrict = "strict"
+)
+
+// validateStrictness returns an error unless s is empty or an accepted level.
+func validateStrictness(s string) error {
+	switch s {
+	case "", StrictnessRelaxed, StrictnessBalanced, StrictnessStrict:
+		return nil
+	}
+	return fmt.Errorf("surface: strictness must be one of %q, %q, %q (got %q)",
+		StrictnessRelaxed, StrictnessBalanced, StrictnessStrict, s)
+}
+
+// Validate reports whether the context's values are acceptable. A nil
+// context is valid. ScanPayload calls it before sending.
+func (a *ActionContext) Validate() error {
+	if a == nil {
+		return nil
+	}
+	return validateStrictness(a.Strictness)
+}
+
+// payloadContext is the context sent with a payload scan: the caller's, with
+// the client's default strictness filling a gap. It never mutates the caller's
+// context, and returns nil when there is nothing to send.
+func (c *Client) payloadContext(opts *ScanFileOptions) (*ActionContext, error) {
+	if err := validateStrictness(c.Strictness); err != nil {
+		return nil, err
+	}
+	var ctx *ActionContext
+	if opts != nil {
+		ctx = opts.Context
+	}
+	if err := ctx.Validate(); err != nil {
+		return nil, err
+	}
+	if c.Strictness == "" || (ctx != nil && ctx.Strictness != "") {
+		return ctx, nil
+	}
+	merged := ActionContext{}
+	if ctx != nil {
+		merged = *ctx
+	}
+	merged.Strictness = c.Strictness
+	return &merged, nil
 }
 
 func (c *Client) buildURL(path string, params url.Values) string {
@@ -320,9 +387,9 @@ func (c *Client) ScanPayload(ctx context.Context, payload []byte, label string, 
 		Encoding string         `json:"encoding,omitempty"`
 		Context  *ActionContext `json:"context,omitempty"`
 	}
-	var actionCtx *ActionContext
-	if opts != nil {
-		actionCtx = opts.Context
+	actionCtx, err := c.payloadContext(opts)
+	if err != nil {
+		return nil, err
 	}
 	var reqBody payloadReq
 	if utf8.Valid(payload) {
