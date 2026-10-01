@@ -31,6 +31,11 @@ type Decision struct {
 	// Strictness is the level the call was screened at: the context's, else
 	// the client's default, else StrictnessBalanced.
 	Strictness string
+	// RiskProbability and RiskReasons mirror Result.ActionRisk when the scan
+	// returned one (nil otherwise). They are informational: Action is still
+	// the scan's recommended action.
+	RiskProbability *float64
+	RiskReasons     []string
 }
 
 // Allowed reports whether the call may proceed.
@@ -256,6 +261,11 @@ func decisionFrom(res *ScanFileResult) Decision {
 		Action: sr.SafetyScore.RecommendedAction,
 		Reason: sr.SafetyScore.PrimaryThreat,
 		Result: sr,
+	}
+	if ar := sr.ActionRisk; ar != nil {
+		p := ar.Probability
+		d.RiskProbability = &p
+		d.RiskReasons = ar.Reasons
 	}
 	if len(sr.ActionScreen) > 0 {
 		var as struct {
