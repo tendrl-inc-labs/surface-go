@@ -264,6 +264,8 @@ Payload scan results may include additional threat detection from agentic securi
 - **`SensitiveData`** — exposed credentials, API keys, or PII
 - **`ToolCallAnalysis`** — suspicious tool/function call patterns
 
+`ScanResult.ActionRisk` (`*ActionRisk`, nil when the feature is off or the payload is not a tool call) is a typed learned risk assessment of a tool call: `Probability` (calibrated 0-1), `Reasons`, `Action` (this engine's own recommendation), `Mode` (`"shadow"` means it does not affect the verdict, or `"on"`), `Calls`, `ModelVersion`, and `Record` (`json.RawMessage`). A guard's `Decision` mirrors it as `RiskProbability *float64` and `RiskReasons []string`; these are informational and never change `Decision.Action`.
+
 ```go
 if result.ScanResult.PromptInjection != nil {
     fmt.Println("Prompt injection detected in payload")

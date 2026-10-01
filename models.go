@@ -115,6 +115,27 @@ type ScanResult struct {
 	// severity, reason, evidence}], contextual} when a tool call was flagged. The
 	// reason is also mirrored in SafetyScore.PrimaryThreat.
 	ActionScreen json.RawMessage `json:"actionScreen,omitempty"`
+	// ActionRisk is the learned action-risk assessment of a tool-call payload.
+	// Nil when the feature is off or the payload is not a tool call.
+	ActionRisk *ActionRisk `json:"actionRisk,omitempty"`
+}
+
+// ActionRisk is the learned action-risk engine's assessment of a tool call.
+// In "shadow" mode it is reported only and does not affect the verdict.
+type ActionRisk struct {
+	// Probability is the calibrated likelihood (0-1) that the call is harmful.
+	Probability float64 `json:"probability"`
+	// Reasons are plain-language explanations; may be empty.
+	Reasons []string `json:"reasons,omitempty"`
+	// Action is what this engine alone would recommend at the caller's
+	// strictness: "Allow", "Review", or "Block".
+	Action string `json:"action"`
+	// Mode is "shadow" (reported only) or "on" (contributes to the verdict).
+	Mode         string `json:"mode"`
+	Calls        int    `json:"calls"`
+	ModelVersion string `json:"modelVersion,omitempty"`
+	// Record is the normalized action the engine scored.
+	Record json.RawMessage `json:"record,omitempty"`
 }
 
 // DeferredScanResponse is returned when a scan is queued (HTTP 202).
