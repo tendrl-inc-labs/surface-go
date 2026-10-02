@@ -39,6 +39,20 @@ type MiddlewareOptions struct {
 	// OnError is called when scanning fails (scanner unavailable, timeout, etc.).
 	// Only called when FailOpen is true (otherwise a 503 is returned automatically).
 	OnError func(r *http.Request, err error)
+
+	// Source says who wrote the scanned bodies: SourceUserPrompt for a chat or
+	// agent endpoint your own users type into (a prompt-injection match there
+	// is held for Review, not blocked, unless the client is strict),
+	// SourceContent for text from elsewhere that an agent will read. Empty
+	// means unknown.
+	Source string
+}
+
+func (o *MiddlewareOptions) scanOptions() *ScanFileOptions {
+	if o == nil || o.Source == "" {
+		return nil
+	}
+	return &ScanFileOptions{Context: &ActionContext{Source: o.Source}}
 }
 
 func (o *MiddlewareOptions) scanRequests() bool {
@@ -120,7 +134,7 @@ func ScanMiddleware(client *Client, next http.Handler, opts *MiddlewareOptions) 
 		}
 
 		// Scan the payload
-		result, scanErr := client.ScanPayload(context.Background(), body, opts.label(), nil)
+		result, scanErr := client.ScanPayload(context.Background(), body, opts.label(), opts.scanOptions())
 		if scanErr != nil {
 			if opts != nil && opts.OnError != nil {
 				opts.OnError(r, scanErr)

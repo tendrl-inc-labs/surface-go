@@ -298,14 +298,15 @@ func TestToolGuard_StrictnessPrecedence(t *testing.T) {
 		t.Errorf("context strictness should win: sent=%v decision=%q", strictnessSent(), d.Strictness)
 	}
 
-	// No strictness anywhere: nothing sent, Decision records balanced.
+	// No strictness anywhere: none sent (only the source, a tool call), and
+	// the Decision records balanced.
 	g = verdictGuard(t, "Allow", "", nil, &seen)
 	seen = nil
 	if d, _ = g.Screen(context.Background(), "t", nil); d.Strictness != StrictnessBalanced {
 		t.Errorf("default decision strictness = %q, want balanced", d.Strictness)
 	}
-	if _, present := seen["context"]; present {
-		t.Errorf("context sent with nothing to send: %v", seen["context"])
+	if c, _ := seen["context"].(map[string]any); len(c) != 1 || c["source"] != SourceToolCall {
+		t.Errorf("context sent with no strictness: %v, want only source tool_call", seen["context"])
 	}
 
 	// Client default applies when the guard and context set none.
@@ -350,5 +351,34 @@ func TestToolGuard_UserRequestFillsOnlyWhenMissing(t *testing.T) {
 	}
 	if userRequestSent() != "from trusted state" {
 		t.Errorf("context's own user request was overwritten: %v", userRequestSent())
+	}
+}
+
+func TestToolGuard_SourceToolCallUnlessSet(t *testing.T) {
+	var seen map[string]any
+	g := verdictGuard(t, "Allow", "", nil, &seen)
+	if _, err := g.Screen(context.Background(), "t", nil); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := seen["context"].(map[string]any); c["source"] != SourceToolCall {
+		t.Errorf("guard source = %v, want tool_call", seen["context"])
+	}
+	g.Context = &ActionContext{Source: SourceContent}
+	if _, err := g.Screen(context.Background(), "t", nil); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := seen["context"].(map[string]any); c["source"] != SourceContent {
+		t.Errorf("context source should win: %v", seen["context"])
+	}
+}
+
+func TestActionContext_SourceValidated(t *testing.T) {
+	for _, s := range []string{"", SourceUserPrompt, SourceContent, SourceToolCall} {
+		if err := (&ActionContext{Source: s}).Validate(); err != nil {
+			t.Errorf("%q: %v", s, err)
+		}
+	}
+	if err := (&ActionContext{Source: "prompt"}).Validate(); err == nil {
+		t.Error("misspelled source accepted")
 	}
 }

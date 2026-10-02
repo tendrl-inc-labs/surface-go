@@ -119,6 +119,36 @@ type ActionContext struct {
 	// StrictnessRelaxed, StrictnessBalanced (the scanner default when empty),
 	// or StrictnessStrict. Face-dangerous actions Block at every level.
 	Strictness string `json:"strictness,omitempty"`
+	// Source is who wrote the payload: SourceUserPrompt, SourceContent or
+	// SourceToolCall. Empty means unknown. A prompt-injection match in a
+	// user's own prompt is held for Review, never blocked, unless Strictness
+	// is StrictnessStrict; in content it blocks; with no source it blocks only
+	// on corroborated evidence.
+	Source string `json:"source,omitempty"`
+	// PersonalMailExpected says your users routinely correspond with people on
+	// personal mailboxes (customers, candidates, family on Gmail). A send to a
+	// personal address the user named in UserRequest is then allowed below
+	// StrictnessStrict. A live credential still blocks.
+	PersonalMailExpected bool `json:"personal_mail_expected,omitempty"`
+}
+
+// Accepted ActionContext.Source values.
+const (
+	// SourceUserPrompt is text the person the agent works for typed.
+	SourceUserPrompt = "user_prompt"
+	// SourceContent is text the agent reads: a web page, an email, tool output.
+	SourceContent = "content"
+	// SourceToolCall is an action the agent is about to take. ToolGuard sets it.
+	SourceToolCall = "tool_call"
+)
+
+func validateSource(s string) error {
+	switch s {
+	case "", SourceUserPrompt, SourceContent, SourceToolCall:
+		return nil
+	}
+	return fmt.Errorf("surface: source must be one of %q, %q, %q (got %q)",
+		SourceUserPrompt, SourceContent, SourceToolCall, s)
 }
 
 // Accepted ActionContext.Strictness values. Empty means the scanner default,
@@ -150,7 +180,10 @@ func (a *ActionContext) Validate() error {
 	if a == nil {
 		return nil
 	}
-	return validateStrictness(a.Strictness)
+	if err := validateStrictness(a.Strictness); err != nil {
+		return err
+	}
+	return validateSource(a.Source)
 }
 
 // payloadContext is the context sent with a payload scan: the caller's, with

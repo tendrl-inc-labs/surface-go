@@ -49,7 +49,7 @@ Prefer not to check the verdict by hand? `ScanFunc` wraps the client: hand it a 
 process := surface.ScanFunc(client, &surface.ScanFileOptions{
     Reject: []string{"Block"}, // refuse what the scanner recommends blocking
 }, func(r *surface.ScanResult) error {
-    // Clean, Informational, Suspicious, or Malicious
+    // Clean, Informational, Suspicious, Risky, or Malicious
     fmt.Println(r.SafetyScore.ThreatLevel)
     return nil // runs only for accepted files
 })
@@ -181,6 +181,16 @@ result, err := client.ScanPayload(ctx, toolCallJSON, "agent-step.json", &surface
 ```
 
 Set `client.Strictness` (or `LocalConfig.Strictness`) for a default on every `ScanPayload`: it fills the context's strictness only when the context sets none, and is sent on its own when you pass no context. Leave it empty and the scanner uses balanced, so an agent with no configuration isn't stopped while it does routine work. An invalid value is rejected with an error before anything is sent.
+
+**Who wrote it: `Source`.** Tell Surface where the payload came from and it judges prompt injection accordingly. `surface.SourceUserPrompt`: the person your agent works for typed it; their own text ("ignore my previous instruction", a story, a pasted log, a translation) is not flagged, and a direct override is held for Review, never blocked, unless `Strictness` is strict. `surface.SourceContent`: text the agent reads (a web page, an email, tool output), where a single injection pattern blocks. `surface.SourceToolCall`: an action the agent is about to take; `ToolGuard` sets it for you. Empty, an injection blocks only when two independent signals agree. `MiddlewareOptions.Source` sets it for a whole endpoint:
+
+```go
+handler := surface.ScanMiddleware(client, chatHandler, &surface.MiddlewareOptions{Source: surface.SourceUserPrompt})
+```
+
+**Personal mailboxes.** Sensitive data (a customer export, a directory) to a Gmail or Outlook address is held for Review by default and blocked at strict; the recipient's own address never counts as the data. Set `PersonalMailExpected: true` when your users routinely correspond with people on personal mailboxes, and a send to an address named in `UserRequest` passes below strict. A live credential still blocks.
+
+**Threat levels.** A Block that rests only on a risky agent action (a tool call, not malware or an injection) is reported as `ThreatLevel: "Risky"` with `RecommendedAction: "Block"`; malware and injections stay `"Malicious"`. Reject on `"Block"` to stop both.
 
 **Use cases**
 
