@@ -156,7 +156,9 @@ func (g *ToolGuard) contextFor(name string, args any, cfg screenConfig) *ActionC
 	}
 	fillStrictness := g.Strictness != "" && (ctx == nil || ctx.Strictness == "")
 	fillRequest := cfg.userRequest != "" && (ctx == nil || ctx.UserRequest == "")
-	if !fillStrictness && !fillRequest {
+	// Everything a guard screens is an action the agent is about to take.
+	fillSource := ctx == nil || ctx.Source == ""
+	if !fillStrictness && !fillRequest && !fillSource {
 		return ctx
 	}
 	merged := ActionContext{}
@@ -168,6 +170,9 @@ func (g *ToolGuard) contextFor(name string, args any, cfg screenConfig) *ActionC
 	}
 	if fillRequest {
 		merged.UserRequest = cfg.userRequest
+	}
+	if fillSource {
+		merged.Source = SourceToolCall
 	}
 	return &merged
 }
