@@ -118,6 +118,27 @@ type ScanResult struct {
 	// ActionRisk is the learned action-risk assessment of a tool-call payload.
 	// Nil when the feature is off or the payload is not a tool call.
 	ActionRisk *ActionRisk `json:"actionRisk,omitempty"`
+	// ContentRisk is the learned estimate that content an agent reads tries
+	// to steer it into a harmful action. Nil when the feature is off or the
+	// payload is a user's prompt or a tool call.
+	ContentRisk *ContentRisk `json:"contentRisk,omitempty"`
+}
+
+// ContentRisk is the content-risk engine's assessment of text an agent is
+// about to read (a page, email, ticket or tool output). In "shadow" mode it
+// is reported only and does not affect the verdict.
+type ContentRisk struct {
+	// Probability is the calibrated likelihood (0-1) that the content is an
+	// injection: a request planted for the agent.
+	Probability float64 `json:"probability"`
+	// Reasons are plain-language explanations; may be empty.
+	Reasons []string `json:"reasons,omitempty"`
+	// Action is what this engine alone would recommend at the caller's
+	// strictness: "Allow", "Review", or "Block".
+	Action string `json:"action"`
+	// Mode is "shadow" (reported only) or "on" (contributes to the verdict).
+	Mode         string `json:"mode"`
+	ModelVersion string `json:"modelVersion,omitempty"`
 }
 
 // ActionRisk is the learned action-risk engine's assessment of a tool call.
