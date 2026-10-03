@@ -123,3 +123,18 @@ func TestToolGuard_NoActionRisk(t *testing.T) {
 		}
 	}
 }
+
+func TestScanResult_ContentRiskDecode(t *testing.T) {
+	var with ScanResult
+	if err := json.Unmarshal([]byte(`{"name":"x","contentRisk":{"probability":0.97,"reasons":["addresses an AI agent and asks it to act"],"action":"Review","mode":"shadow","modelVersion":"content-risk-1"}}`), &with); err != nil {
+		t.Fatal(err)
+	}
+	cr := with.ContentRisk
+	if cr == nil || cr.Probability != 0.97 || cr.Action != "Review" || cr.Mode != "shadow" || cr.ModelVersion != "content-risk-1" || len(cr.Reasons) != 1 {
+		t.Errorf("decoded = %+v", cr)
+	}
+	var without ScanResult
+	if err := json.Unmarshal([]byte(`{"name":"x"}`), &without); err != nil || without.ContentRisk != nil {
+		t.Errorf("without = %+v (%v)", without.ContentRisk, err)
+	}
+}

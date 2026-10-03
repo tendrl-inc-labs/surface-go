@@ -192,6 +192,8 @@ handler := surface.ScanMiddleware(client, chatHandler, &surface.MiddlewareOption
 
 **Threat levels.** A Block that rests only on a risky agent action (a tool call, not malware or an injection) is reported as `ThreatLevel: "Risky"` with `RecommendedAction: "Block"`; malware and injections stay `"Malicious"`. Reject on `"Block"` to stop both.
 
+**Content risk.** When the scanner's content-risk engine is on, a scan of content an agent will read (`Source: surface.SourceContent`, or no source) carries `result.ContentRisk`: `Probability` (calibrated likelihood that the text tries to steer the agent into a harmful action, such as a planted "note to the assistant" asking it to post data out or change a payout), `Action` (what this engine alone recommends), `Mode` (`shadow` = reported only) and plain-language `Reasons`. It is absent for a user's own prompt and for tool calls.
+
 **Use cases**
 
 - **Data egress** — an email or upload leaving `PrincipalDomains` (or to a free-mail address) is flagged; a recipient the user named in `UserRequest` is cleared. With `AllowedEgress` set, an HTTP POST of data to a host on neither list is flagged for review, so a Stripe or Slack call passes while a POST to an unknown endpoint is caught; a bare-IP destination or a secret in the body is flagged even without it.
