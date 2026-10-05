@@ -286,7 +286,7 @@ if result.ScanResult.PromptInjection != nil {
 
 ## Middleware
 
-`ScanMiddleware` wraps any `http.Handler` to automatically scan request bodies before they reach your handler. Requests with threats matching the `Reject` list receive a 403 response.
+`ScanMiddleware` wraps any `http.Handler` to automatically scan request bodies before they reach your handler. Requests with threats matching the `Reject` list receive a 403 response. Leave `Reject` unset and it is `[]string{"Block"}`: whatever Surface recommends blocking (Malicious, Risky, a type the profile refuses) is rejected.
 
 ```go
 mux := http.NewServeMux()
