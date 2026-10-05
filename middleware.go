@@ -13,6 +13,9 @@ type MiddlewareOptions struct {
 	// Reject lists threat levels ("Malicious"/"Suspicious") or recommended actions
 	// ("Block"/"Review") that should be blocked, matched case-insensitively. If the
 	// scan result matches any of these, the request is rejected with 403.
+	// Nil means []string{"Block"}: whatever Surface recommends blocking
+	// (Malicious, Risky, a type the profile refuses). An empty, non-nil slice
+	// rejects nothing.
 	Reject []string
 
 	// ScanRequests enables scanning of incoming request bodies. Default: true.
@@ -77,10 +80,11 @@ func (o *MiddlewareOptions) label() string {
 }
 
 func (o *MiddlewareOptions) shouldReject(score SafetyScore) bool {
-	if o == nil {
-		return false
+	reject := []string{"Block"}
+	if o != nil && o.Reject != nil {
+		reject = o.Reject
 	}
-	for _, level := range o.Reject {
+	for _, level := range reject {
 		// Match a threat level or a recommended action, case-insensitively —
 		// same semantics as ScanFileOptions.Reject.
 		if strings.EqualFold(score.ThreatLevel, level) ||
