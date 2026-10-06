@@ -1,6 +1,9 @@
 package surface
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // SurfaceError is the base error type for all API errors.
 type SurfaceError struct {
@@ -30,6 +33,35 @@ type QuotaExceededError struct{ SurfaceError }
 
 // RateLimitError is returned on 429 when per-minute rate limit is hit.
 type RateLimitError struct{ SurfaceError }
+
+// ErrUnavailable matches, via errors.Is, every error that means Surface gave
+// no real answer: it could not be reached, the call's Timeout ran out, it
+// answered 500/502/503/504, or it sent a body that is not the expected JSON.
+var ErrUnavailable = errors.New("surface: scanner unavailable")
+
+// UnavailableError is returned when Surface gave no real answer (see
+// ErrUnavailable). StatusCode is the HTTP status, or 0 when no response
+// arrived. It unwraps to the cause: the transport error, the JSON decode
+// error, or, for a 5xx, a *SurfaceError, so errors.As(err, &surfaceErr)
+// keeps working for server errors.
+type UnavailableError struct {
+	StatusCode int
+	Message    string
+	Err        error
+}
+
+func (e *UnavailableError) Error() string {
+	if e.StatusCode != 0 {
+		return fmt.Sprintf("surface: unavailable: %d %s", e.StatusCode, e.Message)
+	}
+	return "surface: unavailable: " + e.Message
+}
+
+// Is reports whether target is ErrUnavailable.
+func (e *UnavailableError) Is(target error) bool { return target == ErrUnavailable }
+
+// Unwrap returns the underlying cause.
+func (e *UnavailableError) Unwrap() error { return e.Err }
 
 // MaliciousFileError is returned by any scan method when the result matches an
 // entry in ScanFileOptions.Reject — a threat level ("Clean"/"Suspicious"/
