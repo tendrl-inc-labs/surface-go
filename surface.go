@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -46,11 +47,20 @@ type Client struct {
 	HTTP    *http.Client
 	Mode    ScanMode
 
+	// Timeout is the budget for one call, covering every attempt and retry
+	// wait. It applies when the caller's context has no deadline; a context
+	// deadline governs instead. Zero means DefaultTimeout (60s). When the
+	// budget runs out the call returns an *UnavailableError.
+	Timeout time.Duration
+
 	// Strictness is the default ActionContext.Strictness for ScanPayload: it
 	// fills the context's strictness when the caller's context sets none, and
 	// is sent alone when no context is given. Empty leaves the scanner default
 	// (StrictnessBalanced). An invalid value makes ScanPayload return an error.
 	Strictness string
+
+	// retryBase overrides the first retry backoff (tests only).
+	retryBase time.Duration
 
 	// internal fields for local scanner mode
 	local       *localDaemon
@@ -74,6 +84,7 @@ func NewClient(apiKey string) (*Client, error) {
 		APIKey:  apiKey,
 		BaseURL: defaultBaseURL,
 		HTTP:    http.DefaultClient,
+		Timeout: DefaultTimeout,
 	}, nil
 }
 
@@ -219,37 +230,39 @@ func (c *Client) buildURL(path string, params url.Values) string {
 	return base + path
 }
 
-func (c *Client) do(ctx context.Context, req *http.Request) (*http.Response, error) {
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	req = req.WithContext(ctx)
-	resp, err := c.HTTP.Do(req)
+// do sends an authenticated API request built fresh by build for each
+// attempt (see send). A 4xx answer becomes its typed error.
+func (c *Client) do(ctx context.Context, build func() (*http.Request, error)) (int, []byte, error) {
+	status, body, err := c.send(ctx, c.HTTP, func() (*http.Request, error) {
+		req, err := build()
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		return req, nil
+	})
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
-	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
-		return nil, c.parseError(resp)
+	if status >= 400 {
+		return 0, nil, parseError(status, body)
 	}
-	return resp, nil
+	return status, body, nil
 }
 
-func (c *Client) parseError(resp *http.Response) error {
-	var body struct {
-		Error     string `json:"error"`
-		RequestID string `json:"requestId"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&body)
-	if body.Error == "" {
-		body.Error = resp.Status
+func parseError(status int, body []byte) error {
+	msg, requestID, isJSON := errorBody(body)
+	if msg == "" {
+		msg = fmt.Sprintf("%d %s", status, http.StatusText(status))
 	}
 
 	base := SurfaceError{
-		StatusCode: resp.StatusCode,
-		Message:    body.Error,
-		RequestID:  body.RequestID,
+		StatusCode: status,
+		Message:    msg,
+		RequestID:  requestID,
 	}
 
-	switch resp.StatusCode {
+	switch status {
 	case 401, 403:
 		return &AuthenticationError{base}
 	case 400:
@@ -257,46 +270,50 @@ func (c *Client) parseError(resp *http.Response) error {
 	case 404:
 		return &NotFoundError{base}
 	case 429:
-		msg := strings.ToLower(body.Error)
-		if strings.Contains(msg, "quota") || strings.Contains(msg, "credit") {
+		lower := strings.ToLower(msg)
+		if strings.Contains(lower, "quota") || strings.Contains(lower, "credit") {
 			return &QuotaExceededError{base}
 		}
 		return &RateLimitError{base}
-	default:
-		return &base
 	}
+	if status >= 500 {
+		// 500/502/503/504 never reach here; this is any other 5xx. A JSON
+		// answer is a real one, a proxy page is not.
+		if !isJSON {
+			return &UnavailableError{StatusCode: status, Message: msg, Err: &base}
+		}
+	}
+	return &base
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, params url.Values, out interface{}) error {
-	req, err := http.NewRequest("GET", c.buildURL(path, params), nil)
+	status, body, err := c.do(ctx, func() (*http.Request, error) {
+		return http.NewRequest("GET", c.buildURL(path, params), nil)
+	})
 	if err != nil {
 		return err
 	}
-	resp, err := c.do(ctx, req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return json.NewDecoder(resp.Body).Decode(out)
+	return decodeJSON(status, body, out)
 }
 
-func (c *Client) postJSON(ctx context.Context, path string, body interface{}, out interface{}) error {
-	data, err := json.Marshal(body)
+func (c *Client) postJSON(ctx context.Context, path string, in interface{}, out interface{}) error {
+	data, err := json.Marshal(in)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("POST", c.buildURL(path, nil), bytes.NewReader(data))
+	status, body, err := c.do(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequest("POST", c.buildURL(path, nil), bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.do(ctx, req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		return decodeJSON(status, body, out)
 	}
 	return nil
 }
@@ -352,32 +369,33 @@ func (c *Client) ScanReader(ctx context.Context, filename string, r io.Reader, o
 		params.Set("defer", "true")
 	}
 
-	req, err := http.NewRequest("POST", c.buildURL("/scan", params), &buf)
+	data := buf.Bytes()
+	status, body, err := c.do(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequest("POST", c.buildURL("/scan", params), bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		// The backend derives the request ID from the X-Request-ID header.
+		if opts != nil && opts.RequestID != "" {
+			req.Header.Set("X-Request-ID", opts.RequestID)
+		}
+		return req, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
-	// The backend derives the request ID from the X-Request-ID header.
-	if opts != nil && opts.RequestID != "" {
-		req.Header.Set("X-Request-ID", opts.RequestID)
-	}
 
-	resp, err := c.do(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 202 {
+	if status == 202 {
 		var deferred DeferredScanResponse
-		if err := json.NewDecoder(resp.Body).Decode(&deferred); err != nil {
+		if err := decodeJSON(status, body, &deferred); err != nil {
 			return nil, err
 		}
 		return &ScanFileResult{Deferred: &deferred}, nil
 	}
 
 	var result ScanResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeJSON(status, body, &result); err != nil {
 		return nil, err
 	}
 
@@ -440,32 +458,32 @@ func (c *Client) ScanPayload(ctx context.Context, payload []byte, label string, 
 		params.Set("defer", "true")
 	}
 
-	req, err := http.NewRequest("POST", c.buildURL("/scan/payload", params), bytes.NewReader(bodyJSON))
+	status, body, err := c.do(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequest("POST", c.buildURL("/scan/payload", params), bytes.NewReader(bodyJSON))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		// The backend derives the request ID from the X-Request-ID header.
+		if opts != nil && opts.RequestID != "" {
+			req.Header.Set("X-Request-ID", opts.RequestID)
+		}
+		return req, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	// The backend derives the request ID from the X-Request-ID header.
-	if opts != nil && opts.RequestID != "" {
-		req.Header.Set("X-Request-ID", opts.RequestID)
-	}
 
-	resp, err := c.do(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 202 {
+	if status == 202 {
 		var deferred DeferredScanResponse
-		if err := json.NewDecoder(resp.Body).Decode(&deferred); err != nil {
+		if err := decodeJSON(status, body, &deferred); err != nil {
 			return nil, err
 		}
 		return &ScanFileResult{Deferred: &deferred}, nil
 	}
 
 	var result ScanResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeJSON(status, body, &result); err != nil {
 		return nil, err
 	}
 

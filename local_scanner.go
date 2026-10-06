@@ -118,14 +118,16 @@ func NewLocalClient(config *LocalConfig) (*Client, error) {
 		return nil, fmt.Errorf("surface: scanner binary not found at %s: %w", scannerPath, err)
 	}
 
+	// No client-level timeout: each call is bounded by Client.Timeout.
 	daemon := &localDaemon{
-		client: &http.Client{Timeout: 120 * time.Second},
+		client: &http.Client{},
 	}
 
 	c := &Client{
 		APIKey:     apiKey,
 		Mode:       ModeLocal,
 		HTTP:       http.DefaultClient,
+		Timeout:    DefaultTimeout,
 		Strictness: config.Strictness,
 		local:      daemon,
 		localConfig: &localConfigInternal{
@@ -290,7 +292,7 @@ func (t *tailBuffer) String() string {
 	return string(t.buf)
 }
 
-func (d *localDaemon) scan(ctx context.Context, filename string, r io.Reader, opts *ScanFileOptions) (*ScanFileResult, error) {
+func (c *Client) localScanRequest(ctx context.Context, filename string, r io.Reader, opts *ScanFileOptions) (*ScanFileResult, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	part, err := w.CreateFormFile("file", filename)
@@ -302,43 +304,39 @@ func (d *localDaemon) scan(ctx context.Context, filename string, r io.Reader, op
 	}
 	w.Close()
 
-	scanURL := d.baseURL + "/scan"
+	scanURL := c.local.baseURL + "/scan"
 	if opts != nil && opts.Defer {
 		scanURL += "?defer=true"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", scanURL, &buf)
+	data := buf.Bytes()
+	status, body, err := c.send(ctx, c.local.client, func() (*http.Request, error) {
+		req, err := http.NewRequest("POST", scanURL, bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		return req, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
 
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("surface: local scan request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("surface: read scan response: %w", err)
-	}
-
-	if resp.StatusCode == http.StatusAccepted {
+	if status == http.StatusAccepted {
 		var deferred DeferredScanResponse
-		if err := json.Unmarshal(body, &deferred); err != nil {
-			return nil, fmt.Errorf("surface: decode deferred response: %w", err)
+		if err := decodeJSON(status, body, &deferred); err != nil {
+			return nil, err
 		}
 		return &ScanFileResult{Deferred: &deferred}, nil
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("surface: local scanner returned %d: %s", resp.StatusCode, string(body))
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("surface: local scanner returned %d: %s", status, string(body))
 	}
 
 	var result ScanResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("surface: decode scan result: %w", err)
+	if err := decodeJSON(status, body, &result); err != nil {
+		return nil, err
 	}
 	return &ScanFileResult{ScanResult: &result}, nil
 }
@@ -370,7 +368,7 @@ func (c *Client) scanLocal(ctx context.Context, filename string, r io.Reader, op
 	if err := c.local.ensureRunning(c.localConfig); err != nil {
 		return nil, err
 	}
-	result, err := c.local.scan(ctx, filename, r, opts)
+	result, err := c.localScanRequest(ctx, filename, r, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -428,26 +426,25 @@ func (c *Client) scanLocalPayload(ctx context.Context, payload []byte, label str
 	}
 
 	scanURL := c.local.baseURL + "/scan/payload"
-	req, err := http.NewRequestWithContext(ctx, "POST", scanURL, bytes.NewReader(bodyJSON))
+	status, body, err := c.send(ctx, c.local.client, func() (*http.Request, error) {
+		req, err := http.NewRequest("POST", scanURL, bytes.NewReader(bodyJSON))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("surface: local payload scan: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("surface: local scanner returned %d: %s", resp.StatusCode, string(body))
+	if status != 200 {
+		return nil, fmt.Errorf("surface: local scanner returned %d: %s", status, string(body))
 	}
 
 	var result ScanResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("surface: decode local result: %w", err)
+	if err := decodeJSON(status, body, &result); err != nil {
+		return nil, err
 	}
 
 	sfr := &ScanFileResult{ScanResult: &result}

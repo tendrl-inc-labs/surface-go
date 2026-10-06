@@ -483,26 +483,46 @@ func main() {
 
 ## Error Handling
 
-Errors are returned as typed structs you can assert on:
+Errors are returned as typed structs; match them with `errors.As` / `errors.Is`:
 
 ```go
 result, err := client.ScanFile(ctx, "test.exe", nil)
-if err != nil {
-    switch err.(type) {
-    case *surface.QuotaExceededError:
-        fmt.Println("Monthly scan quota exhausted")
-    case *surface.RateLimitError:
-        fmt.Println("Rate limit hit")
-    case *surface.AuthenticationError:
-        fmt.Println("Invalid API key")
-    case *surface.NotFoundError:
-        fmt.Println("Resource not found")
-    case *surface.SurfaceError:
-        e := err.(*surface.SurfaceError)
-        fmt.Printf("API error %d: %s\n", e.StatusCode, e.Message)
-    }
+var (
+    quotaErr *surface.QuotaExceededError
+    rateErr  *surface.RateLimitError
+    authErr  *surface.AuthenticationError
+    nfErr    *surface.NotFoundError
+    apiErr   *surface.SurfaceError
+)
+switch {
+case errors.Is(err, surface.ErrUnavailable):
+    fmt.Println("Surface unavailable:", err) // see below
+case errors.As(err, &quotaErr):
+    fmt.Println("Monthly scan quota exhausted")
+case errors.As(err, &rateErr):
+    fmt.Println("Rate limit hit")
+case errors.As(err, &authErr):
+    fmt.Println("Invalid API key")
+case errors.As(err, &nfErr):
+    fmt.Println("Resource not found")
+case errors.As(err, &apiErr):
+    fmt.Printf("API error %d: %s\n", apiErr.StatusCode, apiErr.Message)
 }
 ```
+
+## When Surface is unavailable
+
+Anything that is not a real answer from Surface returns an `*surface.UnavailableError`, and `errors.Is(err, surface.ErrUnavailable)` is true: the server could not be reached (refused, reset, DNS), the call's timeout ran out, it answered 500/502/503/504, or it sent a body that is not the expected JSON (an HTML proxy error page, say). `StatusCode` is the HTTP status when there was one. For a 5xx it also wraps a `*surface.SurfaceError`, so existing `errors.As(err, &apiErr)` checks keep matching. A 429 is still a `*RateLimitError` (or `*QuotaExceededError`), and other 4xx errors are unchanged.
+
+Each call has a 60-second budget (`surface.DefaultTimeout`) covering every attempt and wait. Change it with `client.Timeout`; a deadline on the context you pass governs instead:
+
+```go
+client.Timeout = 15 * time.Second
+```
+
+Within the budget the SDK retries 502, 503, 504 and refused or reset connections, up to 10 times, waiting for the response's `Retry-After` (capped at 10 s) or backing off 1, 2, 4, 8 s. It never starts a wait the budget cannot cover. A 500, a 4xx and a request that hung until the timeout are not retried. Hosted deploys restart the scanner, which answers 503 for about 45 seconds while it warms up, so a scan during a deploy is slower rather than failed. A custom `client.HTTP` is used for every attempt.
+
+`ToolGuard` and `Wrap` fail closed: when Surface is unavailable the tool does not run and the error is returned. `ScanMiddleware` follows `FailOpen` (default open: the request goes through; set it to `false` for a 503).
 
 ## Requirements
 
