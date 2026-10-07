@@ -131,6 +131,7 @@ func NewLocalClient(config *LocalConfig) (*Client, error) {
 		Strictness: config.Strictness,
 		local:      daemon,
 		localConfig: &localConfigInternal{
+			apiKey:       apiKey,
 			scannerPath:  scannerPath,
 			dataDir:      config.DataDir,
 			port:         config.Port,
@@ -142,6 +143,7 @@ func NewLocalClient(config *LocalConfig) (*Client, error) {
 }
 
 type localConfigInternal struct {
+	apiKey       string
 	scannerPath  string
 	dataDir      string
 	port         int
@@ -186,6 +188,13 @@ func (d *localDaemon) ensureRunning(config *localConfigInternal) error {
 		logOut = io.MultiWriter(d.logTail, config.stderr)
 	}
 	d.cmd = exec.Command(config.scannerPath, args...)
+	// The scanner refuses to start without a key and reads it from
+	// SURFACE_API_KEY. Pass the client's key through the environment (not a
+	// flag, which other users could read from the process list) so a key set
+	// only as LocalConfig.APIKey or SURFACE_KEY still starts the daemon.
+	if config.apiKey != "" {
+		d.cmd.Env = append(os.Environ(), "SURFACE_API_KEY="+config.apiKey)
+	}
 	d.cmd.Stdout = logOut
 	d.cmd.Stderr = logOut
 	if err := d.cmd.Start(); err != nil {

@@ -4,9 +4,13 @@ Go client for the [Surface](https://tendrl.com/products/surface) file scanning A
 
 ## Installation
 
+Requires Go 1.21+.
+
 ```bash
-go get github.com/tendrl-inc-labs/surface-go
+go get github.com/tendrl-inc-labs/surface-go@v0.3.0
 ```
+
+This README describes v0.3.0. Earlier tags lack `Strictness`, `ReviewFunc`, the `Source*` constants, and `PersonalMailExpected`, so code using them won't compile against v0.2.0; if you use `@latest`, check that `go.mod` records v0.3.0 or later.
 
 ## Scan Modes
 
@@ -29,12 +33,12 @@ import (
 )
 
 func main() {
-    client, err := surface.NewClient("sfk_your_token_here")
+    client, err := surface.NewClient("your-surface-token")
     if err != nil {
         log.Fatal(err)
     }
 
-    result, err := client.ScanFile(context.Background(), "suspicious.exe", nil)
+    result, err := client.ScanFile(context.Background(), "invoice.pdf", nil)
     if err != nil {
         log.Fatal(err)
     }
@@ -42,6 +46,8 @@ func main() {
     fmt.Println(result.ScanResult.SafetyScore.ThreatLevel)
 }
 ```
+
+The examples scan documents and archives, which the Default scan profile accepts. Executables and scripts (`.exe`, `.sh`, ...) are refused by type with a `*ValidationError` unless the key's profile allows them; see [scan profiles](https://tendrl.com/docs/surface/scan-profiles/).
 
 Prefer not to check the verdict by hand? `ScanFunc` wraps the client: hand it a file, your handler receives the `*ScanResult`, and files matching `Reject` never reach it (`ScanBytesFunc` is the same for in-memory data).
 
@@ -54,7 +60,7 @@ process := surface.ScanFunc(client, &surface.ScanFileOptions{
     return nil // runs only for accepted files
 })
 
-if err := process(context.Background(), "suspicious.exe"); err != nil {
+if err := process(context.Background(), "invoice.pdf"); err != nil {
     log.Fatal(err) // *MaliciousFileError when the file was rejected
 }
 ```
@@ -63,7 +69,7 @@ if err := process(context.Background(), "suspicious.exe"); err != nil {
 
 ## Quick Start — Local Mode
 
-Requires the `surface-scanner` binary installed or available on `$PATH`.
+Requires the `surface-scanner` binary installed or available on `$PATH`. The scanner refuses to start without an API key; the client passes its key (from `LocalConfig.APIKey` or `SURFACE_KEY`) to the scanner it launches as `SURFACE_API_KEY`, so set it once for both.
 
 ```go
 package main
@@ -83,7 +89,7 @@ func main() {
     }
     defer client.Close() // stops the scanner daemon
 
-    result, err := client.ScanFile(context.Background(), "suspicious.exe", nil)
+    result, err := client.ScanFile(context.Background(), "invoice.pdf", nil)
     if err != nil {
         log.Fatal(err)
     }
@@ -96,7 +102,7 @@ With custom scanner path:
 
 ```go
 client, err := surface.NewLocalClient(&surface.LocalConfig{
-    APIKey:       "sfk_your_token_here",
+    APIKey:       "your-surface-token",
     ScannerPath:  "/usr/local/bin/surface-scanner",
     DataDir:      "/var/lib/surface/data",
     StartTimeout: 3 * time.Minute, // optional; default 2 minutes
@@ -116,8 +122,10 @@ The first launch on a machine downloads threat feeds, so the first scan can take
 2. `SURFACE_KEY` environment variable
 
 ```bash
-export SURFACE_KEY="sfk_your_token_here"
+export SURFACE_KEY="your-surface-token"
 ```
+
+To get a token, create a key in the Surface dashboard under **Access Control → API keys** and copy the token (it is shown once). The token is the secret the SDK sends; the key's ID is not.
 
 If neither is set, `NewClient` returns an `*AuthenticationError`.
 
@@ -127,12 +135,12 @@ If neither is set, `NewClient` returns an `*AuthenticationError`.
 ctx := context.Background()
 
 // From file path, bytes, or io.Reader
-fromPath, err := client.ScanFile(ctx, "malware.exe", nil)
+fromPath, err := client.ScanFile(ctx, "invoice.pdf", nil)
 fromBytes, err := client.ScanBytes(ctx, "sample.bin", data, nil)
 fromReader, err := client.ScanReader(ctx, "upload.zip", reader, nil)
 
 // Reject malicious files — returns *MaliciousFileError
-checked, err := client.ScanFile(ctx, "upload.exe", &surface.ScanFileOptions{
+checked, err := client.ScanFile(ctx, "upload.zip", &surface.ScanFileOptions{
     Reject: []string{"Malicious", "Suspicious"},
 })
 
@@ -342,7 +350,7 @@ with `ScanBytes` or `ScanReader` where you produce them.
 Scan multiple files concurrently with `ScanFiles`. The third argument controls max concurrency (0 defaults to 10). If any scan fails, remaining scans are canceled and the first error is returned:
 
 ```go
-paths := []string{"file1.exe", "file2.pdf", "file3.zip"}
+paths := []string{"file1.pdf", "file2.zip", "file3.csv"}
 results, err := client.ScanFiles(ctx, paths, nil, 5)
 if err != nil {
     log.Fatal(err)
@@ -486,7 +494,7 @@ func main() {
 Errors are returned as typed structs; match them with `errors.As` / `errors.Is`:
 
 ```go
-result, err := client.ScanFile(ctx, "test.exe", nil)
+result, err := client.ScanFile(ctx, "test.pdf", nil)
 var (
     quotaErr *surface.QuotaExceededError
     rateErr  *surface.RateLimitError

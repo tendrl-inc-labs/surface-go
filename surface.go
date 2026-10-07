@@ -2,12 +2,15 @@
 //
 // Usage:
 //
-//	client := surface.NewClient("sfk_your_token_here")
-//	result, err := client.ScanFile(context.Background(), "malware.exe", nil)
+//	client, err := surface.NewClient("your-surface-token")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	fmt.Println(result.SafetyScore.ThreatLevel)
+//	result, err := client.ScanFile(context.Background(), "invoice.pdf", nil)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Println(result.ScanResult.SafetyScore.ThreatLevel)
 package surface
 
 import (

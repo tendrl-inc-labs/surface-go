@@ -38,6 +38,7 @@ func fakeScanner(mode string) {
 	}
 	if f := os.Getenv("FAKE_SCANNER_ARGS"); f != "" {
 		_ = os.WriteFile(f, []byte(strings.Join(os.Args[1:], "\n")), 0o600)
+		_ = os.WriteFile(f+".key", []byte(os.Getenv("SURFACE_API_KEY")), 0o600)
 	}
 	if mode == "crash" {
 		fmt.Fprintln(os.Stderr, "fatal: could not open threat intel database")
@@ -80,6 +81,25 @@ func TestLocalDaemonListensOnLoopbackWithParentPID(t *testing.T) {
 	}
 	if !strings.Contains(args, fmt.Sprintf("--parent-pid=%d", os.Getpid())) {
 		t.Errorf("daemon not tied to this process: %q", args)
+	}
+}
+
+// The scanner reads its key from SURFACE_API_KEY and will not start without
+// one; the client's key must reach it even when only SURFACE_KEY or
+// LocalConfig.APIKey was set.
+func TestLocalDaemonReceivesClientKey(t *testing.T) {
+	t.Setenv("SURFACE_API_KEY", "")
+	c, argsFile := fakeLocalClient(t, "parentpid", LocalConfig{})
+	if err := c.local.ensureRunning(c.localConfig); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(argsFile + ".key")
+	if string(got) != "sfk_test" {
+		t.Errorf("daemon SURFACE_API_KEY = %q, want the client's key", got)
+	}
+	raw, _ := os.ReadFile(argsFile)
+	if strings.Contains(string(raw), "sfk_test") {
+		t.Errorf("key passed on the command line: %q", raw)
 	}
 }
 
