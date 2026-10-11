@@ -53,7 +53,7 @@ Prefer not to check the verdict by hand? `ScanFunc` wraps the client: hand it a 
 
 ```go
 process := surface.ScanFunc(client, &surface.ScanFileOptions{
-    Reject: []string{"Block"}, // refuse what the scanner recommends blocking
+    Reject: []string{"Block", "Review"}, // uploads: refuse Block and Review
 }, func(r *surface.ScanResult) error {
     // Clean, Informational, Suspicious, Risky, or Malicious
     fmt.Println(r.SafetyScore.ThreatLevel)
@@ -64,6 +64,8 @@ if err := process(context.Background(), "invoice.pdf"); err != nil {
     log.Fatal(err) // *MaliciousFileError when the file was rejected
 }
 ```
+
+For file uploads, reject `Review` as well as `Block`. `Block` needs precise evidence (a known-malware hash, an antivirus signature, a malware rule), so new malware recognized only by the models comes back as `Review`; rejecting `Block` alone lets most of it through. Agent tool calls are different: there `Review` means "confirm with the user" (see [Guarding an agent's tool calls](#guarding-an-agents-tool-calls)).
 
 `Reject` matches the recommended action (`"Block"`, `"Review"`) or the threat level (`"Malicious"`, `"Suspicious"`), case-insensitively, in both API and local mode.
 
