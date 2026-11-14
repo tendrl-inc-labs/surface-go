@@ -159,3 +159,56 @@ func TestScanPayloadDoesNotSendDefer(t *testing.T) {
 		t.Errorf("payload scans are synchronous: %+v", res)
 	}
 }
+
+// Local mode answers with the same typed errors as the hosted API. The bodies
+// are the local daemon's own (licenseAllows writes {"error": reason} with 402).
+func TestLocalModeErrorsAreTyped(t *testing.T) {
+	type check func(error) bool
+	is := func(target interface{}) check {
+		return func(err error) bool { return errors.As(err, target) }
+	}
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		ok     check
+	}{
+		{"quota", 402, `{"error":"this plan's 500 local scans for the month are used up"}`, is(new(*QuotaExceededError))},
+		{"free plan", 402, `{"error":"the local scanner is not included on the Free plan — upgrade at https://tendrl.com/pricing to run it"}`, is(new(*PlanRequiredError))},
+		{"license", 402, `{"error":"this API key is not valid — check your account"}`, func(err error) bool {
+			var se *SurfaceError
+			return errors.As(err, &se) && se.StatusCode == 402
+		}},
+		{"forbidden", 403, `{"error":"Payload scanning is not enabled for this scan profile."}`, is(new(*PermissionDeniedError))},
+		{"validation", 400, `{"error":"file type not allowed"}`, is(new(*ValidationError))},
+		{"rate", 429, `{"error":"rate limit exceeded"}`, is(new(*RateLimitError))},
+	}
+	for _, tc := range cases {
+		c, srv := newTestLocalClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(tc.status)
+			w.Write([]byte(tc.body))
+		})
+		_, perr := c.ScanPayload(context.Background(), []byte("hi"), "", nil)
+		_, ferr := c.ScanBytes(context.Background(), "a.txt", []byte("hi"), nil)
+		srv.Close()
+		for which, err := range map[string]error{"ScanPayload": perr, "ScanBytes": ferr} {
+			if !tc.ok(err) {
+				t.Errorf("%s %s: err = %#v (%v)", tc.name, which, err, err)
+			}
+			if errors.Is(err, ErrUnavailable) {
+				t.Errorf("%s %s: a 4xx is a real answer, not ErrUnavailable", tc.name, which)
+			}
+		}
+	}
+}
+
+func TestLocalModeUnexpectedStatusIsUnavailable(t *testing.T) {
+	c, srv := newTestLocalClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(204)
+	})
+	defer srv.Close()
+	if _, err := c.ScanPayload(context.Background(), []byte("hi"), "", nil); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %#v, want ErrUnavailable", err)
+	}
+}

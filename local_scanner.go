@@ -340,7 +340,7 @@ func (c *Client) localScanRequest(ctx context.Context, filename string, r io.Rea
 	}
 
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("surface: local scanner returned %d: %s", status, string(body))
+		return nil, localStatusError(status, body)
 	}
 
 	var result ScanResult
@@ -447,8 +447,8 @@ func (c *Client) scanLocalPayload(ctx context.Context, payload []byte, label str
 		return nil, err
 	}
 
-	if status != 200 {
-		return nil, fmt.Errorf("surface: local scanner returned %d: %s", status, string(body))
+	if status != http.StatusOK {
+		return nil, localStatusError(status, body)
 	}
 
 	var result ScanResult
@@ -489,4 +489,19 @@ func findFreePort() (int, error) {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	return port, nil
+}
+
+// localStatusError turns a non-200 answer from the local daemon into the same
+// typed errors the hosted API gets: a 4xx (or an unexpected 5xx) goes through
+// parseError, so a license or plan problem (402) is a *QuotaExceededError,
+// *PlanRequiredError, or *SurfaceError, and a 400 is a *ValidationError.
+// 500/502/503/504 never get here; send already made them *UnavailableError.
+func localStatusError(status int, body []byte) error {
+	if status >= 400 {
+		return parseError(status, body)
+	}
+	return &UnavailableError{
+		StatusCode: status,
+		Message:    fmt.Sprintf("local scanner returned unexpected status %d", status),
+	}
 }
