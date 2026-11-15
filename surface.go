@@ -93,6 +93,9 @@ func NewClient(apiKey string) (*Client, error) {
 
 // ScanFileOptions configures a scan request.
 type ScanFileOptions struct {
+	// Defer asks ScanFile to queue the scan and return a Deferred result to
+	// poll with GetScan. ScanPayload ignores it: payload scans always run
+	// synchronously.
 	Defer     bool
 	RequestID string
 	// Reject lists threat levels ("Malicious"/"Suspicious") or recommended
@@ -259,24 +262,52 @@ func parseError(status int, body []byte) error {
 		msg = fmt.Sprintf("%d %s", status, http.StatusText(status))
 	}
 
+	var extra struct {
+		Code        string  `json:"code"`
+		Feature     *string `json:"feature"`
+		CurrentPlan string  `json:"current_plan"`
+	}
+	if isJSON {
+		_ = json.Unmarshal(body, &extra)
+	}
+
 	base := SurfaceError{
 		StatusCode: status,
 		Message:    msg,
 		RequestID:  requestID,
+		Code:       extra.Code,
 	}
 
+	lower := strings.ToLower(msg)
+	// A plan wall: 403 code=plan_required, or the 402 that ?defer=true gets on
+	// a plan without async scanning (feature set, no code). The local
+	// scanner's 402 for a plan without it uses the same words with no fields.
+	planWall := extra.Code == "plan_required" || extra.Feature != nil ||
+		strings.Contains(lower, "not included on the")
+
 	switch status {
-	case 401, 403:
+	case 401:
 		return &AuthenticationError{base}
 	case 400:
 		return &ValidationError{base}
+	case 402:
+		if planWall {
+			return planRequired(base, extra.Feature, extra.CurrentPlan)
+		}
+		// Hosted: "monthly scan quota exceeded (N/M scans used)"; local
+		// scanner: "this plan's N local scans for the month are used up".
+		if strings.Contains(lower, "quota") || strings.Contains(lower, "used up") {
+			return &QuotaExceededError{base}
+		}
+	case 403:
+		if planWall {
+			return planRequired(base, extra.Feature, extra.CurrentPlan)
+		}
+		return &PermissionDeniedError{base}
 	case 404:
 		return &NotFoundError{base}
 	case 429:
-		lower := strings.ToLower(msg)
-		if strings.Contains(lower, "quota") || strings.Contains(lower, "credit") {
-			return &QuotaExceededError{base}
-		}
+		// Every Surface 429 is a rate limit; quota exhaustion is 402.
 		return &RateLimitError{base}
 	}
 	if status >= 500 {
@@ -287,6 +318,14 @@ func parseError(status int, body []byte) error {
 		}
 	}
 	return &base
+}
+
+func planRequired(base SurfaceError, feature *string, plan string) error {
+	e := &PlanRequiredError{SurfaceError: base, CurrentPlan: plan}
+	if feature != nil {
+		e.Feature = *feature
+	}
+	return e
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, params url.Values, out interface{}) error {
@@ -425,6 +464,9 @@ func (c *Client) ScanReader(ctx context.Context, filename string, r io.Reader, o
 //
 // Text payloads are sent as raw strings (no encoding overhead). Binary payloads
 // are automatically base64-encoded with encoding:"base64" set.
+//
+// opts.Defer has no effect here: payload scans always run synchronously, so
+// the result's ScanResult is set and Deferred is nil.
 func (c *Client) ScanPayload(ctx context.Context, payload []byte, label string, opts *ScanFileOptions) (*ScanFileResult, error) {
 	if c.Mode == ModeLocal {
 		return c.scanLocalPayload(ctx, payload, label, opts)
@@ -456,13 +498,10 @@ func (c *Client) ScanPayload(ctx context.Context, payload []byte, label string, 
 		return nil, err
 	}
 
-	params := url.Values{}
-	if opts != nil && opts.Defer {
-		params.Set("defer", "true")
-	}
-
+	// ScanFileOptions.Defer is ignored: the payload endpoint has no deferred
+	// path, so ?defer=true is not sent.
 	status, body, err := c.do(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequest("POST", c.buildURL("/scan/payload", params), bytes.NewReader(bodyJSON))
+		req, err := http.NewRequest("POST", c.buildURL("/scan/payload", nil), bytes.NewReader(bodyJSON))
 		if err != nil {
 			return nil, err
 		}

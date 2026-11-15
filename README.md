@@ -147,6 +147,7 @@ checked, err := client.ScanFile(ctx, "upload.zip", &surface.ScanFileOptions{
 })
 
 // Deferred scan (returns immediately, poll for results)
+// (ScanFile only: ScanPayload ignores Defer and always answers synchronously)
 queued, err := client.ScanFile(ctx, "large.zip", &surface.ScanFileOptions{Defer: true})
 if queued.Deferred != nil {
     raw, err := client.GetScan(ctx, queued.Deferred.ScanID)
@@ -498,20 +499,26 @@ Errors are returned as typed structs; match them with `errors.As` / `errors.Is`:
 ```go
 result, err := client.ScanFile(ctx, "test.pdf", nil)
 var (
-    quotaErr *surface.QuotaExceededError
-    rateErr  *surface.RateLimitError
-    authErr  *surface.AuthenticationError
-    nfErr    *surface.NotFoundError
-    apiErr   *surface.SurfaceError
+    quotaErr  *surface.QuotaExceededError
+    planErr   *surface.PlanRequiredError
+    deniedErr *surface.PermissionDeniedError
+    rateErr   *surface.RateLimitError
+    authErr   *surface.AuthenticationError
+    nfErr     *surface.NotFoundError
+    apiErr    *surface.SurfaceError
 )
 switch {
 case errors.Is(err, surface.ErrUnavailable):
     fmt.Println("Surface unavailable:", err) // see below
-case errors.As(err, &quotaErr):
+case errors.As(err, &quotaErr): // 402
     fmt.Println("Monthly scan quota exhausted")
-case errors.As(err, &rateErr):
+case errors.As(err, &planErr): // 403 code=plan_required, or 402 for Defer without async
+    fmt.Printf("Not on the %s plan: %s\n", planErr.CurrentPlan, planErr.Feature)
+case errors.As(err, &deniedErr): // other 403: RBAC, blocked IP, payload scanning off
+    fmt.Println("Not allowed:", deniedErr.Message)
+case errors.As(err, &rateErr): // 429
     fmt.Println("Rate limit hit")
-case errors.As(err, &authErr):
+case errors.As(err, &authErr): // 401
     fmt.Println("Invalid API key")
 case errors.As(err, &nfErr):
     fmt.Println("Resource not found")
@@ -520,9 +527,11 @@ case errors.As(err, &apiErr):
 }
 ```
 
+Every typed error embeds `SurfaceError`: `StatusCode`, `Message` (the server's `error` text), `RequestID`, and `Code` (the server's `code` field, when it sends one). A `*PlanRequiredError` also matches `errors.As(err, &deniedErr)`, so one `*PermissionDeniedError` check covers every "not allowed" answer; check for the plan wall first if you want to tell them apart.
+
 ## When Surface is unavailable
 
-Anything that is not a real answer from Surface returns an `*surface.UnavailableError`, and `errors.Is(err, surface.ErrUnavailable)` is true: the server could not be reached (refused, reset, DNS), the call's timeout ran out, it answered 500/502/503/504, or it sent a body that is not the expected JSON (an HTML proxy error page, say). `StatusCode` is the HTTP status when there was one. For a 5xx it also wraps a `*surface.SurfaceError`, so existing `errors.As(err, &apiErr)` checks keep matching. A 429 is still a `*RateLimitError` (or `*QuotaExceededError`), and other 4xx errors are unchanged.
+Anything that is not a real answer from Surface returns an `*surface.UnavailableError`, and `errors.Is(err, surface.ErrUnavailable)` is true: the server could not be reached (refused, reset, DNS), the call's timeout ran out, it answered 500/502/503/504, or it sent a body that is not the expected JSON (an HTML proxy error page, say). `StatusCode` is the HTTP status when there was one. For a 5xx it also wraps a `*surface.SurfaceError`, so existing `errors.As(err, &apiErr)` checks keep matching. A 429 is still a `*RateLimitError`, and other 4xx errors are unchanged.
 
 Each call has a 60-second budget (`surface.DefaultTimeout`) covering every attempt and wait. Change it with `client.Timeout`; a deadline on the context you pass governs instead:
 

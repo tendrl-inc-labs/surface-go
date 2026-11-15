@@ -10,6 +10,9 @@ type SurfaceError struct {
 	StatusCode int
 	Message    string
 	RequestID  string
+	// Code is the server's machine-readable "code" field (e.g.
+	// "plan_required"), or "" when it sent none.
+	Code string
 }
 
 func (e *SurfaceError) Error() string {
@@ -28,10 +31,37 @@ type ValidationError struct{ SurfaceError }
 // NotFoundError is returned on 404 — resource not found.
 type NotFoundError struct{ SurfaceError }
 
-// QuotaExceededError is returned on 429 when monthly credit quota is exhausted.
+// PermissionDeniedError is returned on 403 — the key is valid but may not do
+// this: an RBAC denial ("permission denied: …"), a blocked client IP, or a
+// scan profile with payload scanning turned off. Message is the server's text
+// and Code its "code" field, if any. A feature the plan does not include is a
+// *PlanRequiredError, which errors.As also matches as a
+// *PermissionDeniedError. An invalid or missing key is 401 and returns
+// *AuthenticationError.
+type PermissionDeniedError struct{ SurfaceError }
+
+// PlanRequiredError is returned when the account's plan does not include what
+// was asked for: a 403 with Code "plan_required", or the 402 Surface answers
+// when ScanFileOptions.Defer is used on a plan without async scanning (that
+// one carries no Code). It is a plan wall, not quota exhaustion. Feature and
+// CurrentPlan hold the server's "feature" and "current_plan" fields.
+type PlanRequiredError struct {
+	SurfaceError
+	Feature     string
+	CurrentPlan string
+}
+
+// Unwrap lets errors.As(err, &permissionDenied) match a plan wall too.
+func (e *PlanRequiredError) Unwrap() error {
+	return &PermissionDeniedError{e.SurfaceError}
+}
+
+// QuotaExceededError is returned on 402 when the monthly scan quota is used
+// up ("monthly scan quota exceeded (N/M scans used)"). A 429 is a rate limit
+// and returns *RateLimitError instead.
 type QuotaExceededError struct{ SurfaceError }
 
-// RateLimitError is returned on 429 when per-minute rate limit is hit.
+// RateLimitError is returned on 429 — too many requests; wait and retry.
 type RateLimitError struct{ SurfaceError }
 
 // ErrUnavailable matches, via errors.Is, every error that means Surface gave
